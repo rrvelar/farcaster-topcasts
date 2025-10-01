@@ -1,6 +1,5 @@
 import postgres from "postgres";
 
-// Обязательно поставь в Vercel переменную окружения DATABASE_URL.
-// Для Supabase берём Transaction pooler (порт 6543) + sslmode=require.
+// Для Supabase используй строку вида postgresql://...:6543/... с sslmode=require
 const url = process.env.DATABASE_URL!;
 export const sql = postgres(url, { ssl: "require" });
