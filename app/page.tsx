@@ -31,11 +31,19 @@ const RANGES = [
   { key: "7d", label: "7 days" },
 ] as const;
 
-// Correct Warpcast cast URL
+// Warpcast cast URL
 function makeCastUrl(hash: string, username?: string | null) {
   if (username && username.trim()) return `https://warpcast.com/${username}/${hash}`;
-  return `https://warpcast.com/~/cast/${hash}`; // NOTE: /~/cast/, not /~/casts/
+  return `https://warpcast.com/~/cast/${hash}`;
 }
+// Warpcast profile URL
+function makeProfileUrl(fid: number, handle?: string) {
+  if (handle && handle.trim()) return `https://warpcast.com/${handle}`;
+  return `https://warpcast.com/~/profiles/${fid}`;
+}
+
+const PROMO_FID = Number(process.env.NEXT_PUBLIC_PROMO_FID || "0");
+const PROMO_HANDLE = (process.env.NEXT_PUBLIC_PROMO_HANDLE || "").trim();
 
 export default function Page() {
   // filters
@@ -49,11 +57,12 @@ export default function Page() {
   const [items, setItems] = useState<Cast[]>([]);
   const [error, setError] = useState<string | null>(null);
 
-  // mini app state
+  // mini app + gates
   const [isMiniApp, setIsMiniApp] = useState(false);
-  const [isAdded, setIsAdded] = useState<boolean>(true); // assume added on web
-  const [debugInfo, setDebugInfo] = useState<Record<string, any> | null>(null);
+  const [isAdded, setIsAdded] = useState<boolean>(true); // web: treat as added
+  const [followConfirmed, setFollowConfirmed] = useState<boolean>(false);
   const lastCtxRef = useRef<any>(null);
+  const [debugInfo, setDebugInfo] = useState<Record<string, any> | null>(null);
 
   async function load() {
     setLoading(true);
@@ -71,7 +80,7 @@ export default function Page() {
     }
   }
 
-  // Init Mini App SDK and robust “added” detection — БЕЗ cleanup()
+  // Init Mini App SDK + robust added detection (no TypeScript cleanup issues)
   useEffect(() => {
     let cancelled = false;
     let timers: Array<ReturnType<typeof setTimeout>> = [];
@@ -83,7 +92,6 @@ export default function Page() {
           typeof window !== "undefined"
             ? new URL(window.location.href)
             : new URL("https://example.com");
-        const forcePanel = url.searchParams.get("debugAdd") === "1";
         const wantDebug = url.searchParams.get("debug") === "1";
 
         const inMini = await sdk.isInMiniApp();
@@ -91,7 +99,9 @@ export default function Page() {
         setIsMiniApp(inMini);
 
         if (!inMini) {
-          setIsAdded(!forcePanel);
+          // в обычном вебе гейт не показываем
+          setIsAdded(true);
+          setFollowConfirmed(true);
           if (wantDebug) setDebugInfo({ inMini, reason: "not in mini app" });
           return;
         }
@@ -117,16 +127,16 @@ export default function Page() {
         }
         lastCtxRef.current = ctx;
 
-        let added = computeAdded(ctx);
-        if (forcePanel) added = false;
-        if (added === undefined) setIsAdded(false);
-        else setIsAdded(!!added);
+        const added = computeAdded(ctx);
+        setIsAdded(added === undefined ? false : !!added);
 
         if (wantDebug) {
           setDebugInfo({
             inMini,
             initialAdded: added,
             initialCtx: ctx,
+            promoFid: PROMO_FID,
+            promoHandle: PROMO_HANDLE || null
           });
         }
 
@@ -149,10 +159,7 @@ export default function Page() {
           } catch {}
         };
 
-        // подписка на события, если SDK их даёт
         off = (sdk as any)?.events?.on?.("context", onContextUpdate);
-
-        // страховочный поллинг
         [500, 1200, 2500].forEach((ms) => {
           const t = setTimeout(onContextUpdate, ms);
           timers.push(t);
@@ -160,6 +167,7 @@ export default function Page() {
       } catch (e) {
         setIsMiniApp(false);
         setIsAdded(true);
+        setFollowConfirmed(true);
         const wantDebug =
           typeof window !== "undefined" &&
           new URL(window.location.href).searchParams.get("debug") === "1";
@@ -194,8 +202,71 @@ export default function Page() {
     }
   };
 
+  // Open profile to follow (we cannot verify follow server-side here without Neynar;
+  // we assume user follows after clicking)
+  const openUrl = async (url: string) => {
+    try {
+      if ((sdk as any)?.actions?.openURL) {
+        await (sdk as any).actions.openURL(url);
+      } else {
+        window.open(url, "_blank", "noopener,noreferrer");
+      }
+    } catch {
+      window.open(url, "_blank", "noopener,noreferrer");
+    }
+  };
+  const handleFollow = async () => {
+    const url = makeProfileUrl(PROMO_FID, PROMO_HANDLE);
+    await openUrl(url);
+    // считаем, что юзер подписался; контент разблокируем
+    setFollowConfirmed(true);
+  };
+
+  // ===== UI =====
   return (
-    <div className="mx-auto max-w-6xl px-4 py-6 pb-24">
+    <div className="mx-auto max-w-6xl px-4 py-6 pb-28">
+      {/* HARD GATE #1: must add mini-app */}
+      {isMiniApp && !isAdded && (
+        <div className="fixed inset-0 z-[60] bg-white/80 backdrop-blur-sm">
+          <div className="absolute inset-x-0 bottom-0 p-4 pb-[max(env(safe-area-inset-bottom),1rem)]">
+            <div className="mx-auto max-w-xl rounded-2xl border bg-white shadow-xl p-5">
+              <h2 className="text-lg font-semibold mb-1">Add “Top Casts” to My Apps</h2>
+              <p className="text-sm text-gray-600 mb-4">
+                To continue, please add this mini app to your Warpcast apps.
+              </p>
+              <button
+                onClick={handleAddMiniApp}
+                className="w-full px-4 py-2 rounded-xl bg-black text-white text-sm"
+              >
+                Add to My Apps
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* HARD GATE #2: must follow */}
+      {isMiniApp && isAdded && PROMO_FID > 0 && !followConfirmed && (
+        <div className="fixed inset-0 z-[50] bg-white/60 backdrop-blur-[2px]">
+          <div className="absolute inset-x-0 bottom-0 p-4 pb-[max(env(safe-area-inset-bottom),1rem)]">
+            <div className="mx-auto max-w-xl rounded-2xl border bg-white shadow-xl p-5">
+              <h2 className="text-lg font-semibold mb-1">
+                Follow {PROMO_HANDLE ? `@${PROMO_HANDLE}` : "our account"}
+              </h2>
+              <p className="text-sm text-gray-600 mb-4">
+                Please follow to access the app.
+              </p>
+              <button
+                onClick={handleFollow}
+                className="w-full px-4 py-2 rounded-xl bg-black text-white text-sm"
+              >
+                Follow in Warpcast
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       <h1 className="text-2xl font-semibold mb-4">Top casts</h1>
 
       {/* range */}
@@ -316,26 +387,6 @@ export default function Page() {
 
       {!loading && items.length === 0 && !error && (
         <div className="text-gray-500 mt-6">Nothing here yet. Try again later.</div>
-      )}
-
-      {/* Bottom prompt — only in Mini App and when not yet added */}
-      {isMiniApp && !isAdded && (
-        <div className="fixed inset-x-0 bottom-0 z-50">
-          <div className="mx-auto max-w-6xl px-4 pb-[max(env(safe-area-inset-bottom),1rem)] pt-3">
-            <div className="bg-white border shadow-lg rounded-xl p-3 flex items-center justify-between">
-              <div className="text-sm">
-                <div className="font-medium">Add this Mini App</div>
-                <div className="text-gray-500">Save to your Apps for quick access.</div>
-              </div>
-              <button
-                onClick={handleAddMiniApp}
-                className="px-3 py-2 rounded-lg bg-black text-white text-sm"
-              >
-                Add to my apps
-              </button>
-            </div>
-          </div>
-        </div>
       )}
 
       {/* Optional: debug overlay (?debug=1) */}
