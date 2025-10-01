@@ -3,7 +3,7 @@
     "name": "Top Casts",
     "version": "1",
     "iconUrl": "https://farcaster-topcasts.vercel.app/icon-512.png",
-    "homeUrl": "https://farcaster-topcasts.vercel.app",
+    "homeUrl": "https://farcaster-topcasts.vercel.app/",
     "imageUrl": "https://farcaster-topcasts.vercel.app/preview.png",
     "buttonTitle": "Open Top Casts",
     "splashImageUrl": "https://farcaster-topcasts.vercel.app/splash.png",
