@@ -10,9 +10,10 @@ function sinceISO(hours = 24) {
   return d.toISOString();
 }
 
+// ---- fetch: casts -----------------------------------------------------------
 async function fetchRecentCasts(cursor?: string) {
   const u = new URL(`${API}/cast/search`);
-u.searchParams.set("q", "*"); // wildcard: вернуть любые касты
+  u.searchParams.set("q", "*");           // wildcard: любые касты
   u.searchParams.set("limit", "100");
   u.searchParams.set("since", sinceISO(24));
   if (cursor) u.searchParams.set("cursor", cursor);
@@ -22,9 +23,21 @@ u.searchParams.set("q", "*"); // wildcard: вернуть любые касты
     const text = await r.text();
     throw new Error(`Neynar cast/search ${r.status}: ${text}`);
   }
-  return r.json() as Promise<{ casts: any[]; cursor?: string }>;
+  const data = await r.json();
+
+  // Формат Neynar v2: { result: { casts: [...], next: { cursor } } }
+  const result = data?.result ?? data;
+  const casts = Array.isArray(result?.casts)
+    ? result.casts
+    : Array.isArray(result?.messages)
+      ? result.messages
+      : [];
+  const nextCursor = result?.next?.cursor ?? result?.cursor ?? undefined;
+
+  return { casts, cursor: nextCursor } as { casts: any[]; cursor?: string };
 }
 
+// ---- fetch: reaction counts -------------------------------------------------
 async function fetchReactionCounts(hashes: string[]) {
   const r = await fetch(`${API}/reaction/counts`, {
     method: "POST",
@@ -35,7 +48,12 @@ async function fetchReactionCounts(hashes: string[]) {
     const text = await r.text();
     throw new Error(`Neynar reaction/counts ${r.status}: ${text}`);
   }
-  return r.json() as Promise<{ counts: Array<{ cast_hash: string; likes: number; recasts: number; replies: number }> }>;
+  const data = await r.json();
+  const counts =
+    Array.isArray(data?.counts) ? data.counts :
+    Array.isArray(data?.result?.counts) ? data.result.counts :
+    [];
+  return { counts } as { counts: Array<{ cast_hash: string; likes: number; recasts: number; replies: number }> };
 }
 
 export const revalidate = 0;
@@ -46,25 +64,30 @@ export async function GET() {
       return NextResponse.json({ error: "NEYNAR_API_KEY missing" }, { status: 500 });
     }
 
+    // 1) Пагинация по кастам за 24 часа
     let cursor: string | undefined;
     const all: any[] = [];
     do {
       const page = await fetchRecentCasts(cursor);
-      all.push(...page.casts);
+      if (Array.isArray(page.casts) && page.casts.length) {
+        all.push(...page.casts);
+      }
       cursor = page.cursor;
     } while (cursor);
 
+    // 2) Счётчики реакций батчами по 100
     const B = 100;
     const counts: any[] = [];
     for (let i = 0; i < all.length; i += B) {
-      const batch = all.slice(i, i + B).map((c) => c.hash);
+      const batch = all.slice(i, i + B).map((c: any) => c.hash);
       if (batch.length === 0) continue;
       const { counts: cc } = await fetchReactionCounts(batch);
       counts.push(...cc);
     }
 
-    const byHash = new Map(all.map((c) => [c.hash, c]));
-    const rows = counts.map((r) => {
+    // 3) Мерж + расчёт score
+    const byHash = new Map(all.map((c: any) => [c.hash, c]));
+    const rows = counts.map((r: any) => {
       const c = byHash.get(r.cast_hash) || {};
       const likes = r.likes ?? 0;
       const recasts = r.recasts ?? 0;
@@ -80,6 +103,7 @@ export async function GET() {
       };
     });
 
+    // 4) Upsert в Postgres
     if (rows.length) {
       const values = rows.map((_, i) =>
         `($${i*9+1}, $${i*9+2}, $${i*9+3}, $${i*9+4}, $${i*9+5}, $${i*9+6}, $${i*9+7}, $${i*9+8}, $${i*9+9})`
