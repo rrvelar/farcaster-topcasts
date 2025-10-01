@@ -49,7 +49,7 @@ async function searchCasts(sinceISO: string, cursor?: string) {
       TOP_LANGS.length > 0 ? TOP_LANGS.map((l) => `lang:${l}`).join(" OR ") : "*";
     u.searchParams.set("q", langQuery);        // фильтр по языкам
     u.searchParams.set("limit", "100");
-    u.searchParams.set("sort_type", "latest"); // новейшие вперёд
+    u.searchParams.set("sort_type", "desc_chron"); // новейшие вперёд
     u.searchParams.set(timeKey, sinceISO);
     if (cursor) u.searchParams.set("cursor", cursor);
     return u;
