@@ -34,24 +34,38 @@ async function upsertState(fields: { last_ts?: string; updated_at?: string }) {
 }
 
 // ---- CAST SEARCH (без счётчиков) ----
+// Пробуем сначала with `since`, если пусто — повторяем с `after`
 async function searchCasts(sinceISO: string, cursor?: string) {
-  const u = new URL(`${API}/cast/search`);
-  u.searchParams.set("q", "lang:ru OR lang:en"); // сузить по языкам (можно поменять)
-  u.searchParams.set("limit", "100");
-  u.searchParams.set("since", sinceISO);
-  if (cursor) u.searchParams.set("cursor", cursor);
+  const makeUrl = (timeKey: "since" | "after") => {
+    const u = new URL(`${API}/cast/search`);
+    u.searchParams.set("q", "*");      // максимально широкий поиск
+    u.searchParams.set("limit", "100");
+    u.searchParams.set(timeKey, sinceISO);
+    if (cursor) u.searchParams.set("cursor", cursor);
+    return u;
+  };
 
-  const r = await fetch(u, { headers: { "x-api-key": KEY, accept: "application/json" } });
-  if (!r.ok) throw new Error(`Neynar cast/search ${r.status}: ${await r.text()}`);
+  // попытка №1: since
+  let r = await fetch(makeUrl("since"), { headers: { "x-api-key": KEY, accept: "application/json" } });
+  if (!r.ok) throw new Error(`Neynar cast/search (since) ${r.status}: ${await r.text()}`);
+  let data = await r.json();
+  let result = data?.result ?? data;
+  let casts = Array.isArray(result?.casts) ? result.casts :
+              Array.isArray(result?.messages) ? result.messages : [];
+  let nextCursor = result?.next?.cursor ?? result?.cursor ?? undefined;
 
-  const data = await r.json();
-  const result = data?.result ?? data;
-  const casts = Array.isArray(result?.casts)
-    ? result.casts
-    : Array.isArray(result?.messages)
-      ? result.messages
-      : [];
-  const nextCursor = result?.next?.cursor ?? result?.cursor ?? undefined;
+  if (casts.length > 0 || cursor) {
+    return { casts, cursor: nextCursor } as { casts: any[]; cursor?: string };
+  }
+
+  // попытка №2: after
+  r = await fetch(makeUrl("after"), { headers: { "x-api-key": KEY, accept: "application/json" } });
+  if (!r.ok) throw new Error(`Neynar cast/search (after) ${r.status}: ${await r.text()}`);
+  data = await r.json();
+  result = data?.result ?? data;
+  casts = Array.isArray(result?.casts) ? result.casts :
+          Array.isArray(result?.messages) ? result.messages : [];
+  nextCursor = result?.next?.cursor ?? result?.cursor ?? undefined;
 
   return { casts, cursor: nextCursor } as { casts: any[]; cursor?: string };
 }
