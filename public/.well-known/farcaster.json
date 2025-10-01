@@ -1,1 +1,13 @@
+{
+  "miniapp": {
+    "version": "1",
+    "name": "Top Casts",
+    "iconUrl": "https://placehold.co/512x512/png?text=TC",
+    "homeUrl": "https://YOUR_DOMAIN/",
+    "imageUrl": "https://placehold.co/1200x630/png?text=Top+Casts",
+    "buttonTitle": "Открыть",
+    "splashImageUrl": "https://placehold.co/512x512/png?text=TC",
+    "splashBackgroundColor": "#ffffff"
+  }
+}
 
