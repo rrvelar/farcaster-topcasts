@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, ReactNode } from "react";
 import { sdk } from "@farcaster/miniapp-sdk";
 
 type Cast = {
@@ -62,94 +62,116 @@ const writeAddedCache = (fid: number | null, val = true) => {
   } catch {}
 };
 
-/* ---------------------- Hover card (fixed, right aligned) --------------------- */
+/* ===========================
+   Smart hover (auto-flip)
+   =========================== */
 
-function useHoverCardAnchor() {
-  const anchorRef = useRef<HTMLDivElement | null>(null);
-  const [show, setShow] = useState(false);
-  const [top, setTop] = useState<number | null>(null);
-  const enterTimer = useRef<any>(null);
-  const leaveTimer = useRef<any>(null);
+type TooltipPos = { left: number; top: number; side: "right" | "left" };
 
-  const onMouseEnter = () => {
-    if (leaveTimer.current) clearTimeout(leaveTimer.current);
-    enterTimer.current = setTimeout(() => {
-      if (!anchorRef.current) return;
-      const rect = anchorRef.current.getBoundingClientRect();
-      setTop(rect.bottom + 8); // ровно под ником
-      setShow(true);
-    }, 120);
-  };
-
-  const onMouseLeave = () => {
-    if (enterTimer.current) clearTimeout(enterTimer.current);
-    leaveTimer.current = setTimeout(() => setShow(false), 120);
-  };
-
-  const attachProps = {
-    ref: anchorRef,
-    onMouseEnter,
-    onMouseLeave
-  };
-
-  const cardProps = {
-    show,
-    top: top ?? 0,
-    onMouseEnter,
-    onMouseLeave
-  };
-
-  return { attachProps, cardProps, setShow };
+function useSmartTooltip() {
+  const compute = useCallback((anchor: HTMLElement, tooltipWidth = 300): TooltipPos => {
+    const r = anchor.getBoundingClientRect();
+    const gap = 10;
+    const preferredLeft = r.right + gap;
+    const fallbackLeft  = r.left - tooltipWidth - gap;
+    const fitsRight = preferredLeft + tooltipWidth <= window.innerWidth - 8;
+    const left = fitsRight ? preferredLeft : Math.max(8, fallbackLeft);
+    const midY = r.top + r.height / 2;
+    const top = Math.max(8, Math.min(midY - 72, window.innerHeight - 168));
+    return { left, top, side: fitsRight ? "right" : "left" };
+  }, []);
+  return { compute };
 }
 
-function ProfileCardFixed(props: {
-  show: boolean;
-  top: number;
-  onMouseEnter: () => void;
-  onMouseLeave: () => void;
-  display_name?: string | null;
-  username?: string | null;
-  pfp_url?: string | null;
-  fid?: number;
+function AuthorHoverWrap({
+  c,
+  children,
+}: {
+  c: { fid: number; username?: string | null; display_name?: string | null; pfp_url?: string | null };
+  children: ReactNode;
 }) {
-  if (!props.show) return null;
+  const anchorRef = useRef<HTMLDivElement | null>(null);
+  const { compute } = useSmartTooltip();
+  const [open, setOpen] = useState(false);
+  const [pos, setPos] = useState<TooltipPos | null>(null);
+  const hideTimer = useRef<any>(null);
+
+  const show = () => {
+    const el = anchorRef.current;
+    if (!el) return;
+    if (hideTimer.current) clearTimeout(hideTimer.current);
+    setPos(compute(el, 300));
+    setOpen(true);
+  };
+  const hide = (delay = 0) => {
+    if (hideTimer.current) clearTimeout(hideTimer.current);
+    hideTimer.current = setTimeout(() => setOpen(false), delay);
+  };
+
+  const onClick = (e: React.MouseEvent) => {
+    // не трогаем клики по ссылкам внутри
+    const target = e.target as HTMLElement;
+    if (target.closest("a")) return;
+    setOpen((v) => {
+      if (v) return false;
+      show();
+      return true;
+    });
+  };
 
   return (
-    <div
-      className="fixed z-50 right-3 w-[min(320px,92vw)] rounded-2xl border bg-white shadow-2xl"
-      style={{ top: props.top }}
-      onMouseEnter={props.onMouseEnter}
-      onMouseLeave={props.onMouseLeave}
-    >
-      <div className="p-3 flex items-center gap-3">
-        {props.pfp_url ? (
-          // eslint-disable-next-line @next/next/no-img-element
-          <img
-            src={props.pfp_url}
-            alt=""
-            className="w-14 h-14 rounded-2xl object-cover"
-            referrerPolicy="no-referrer"
-          />
-        ) : (
-          <div className="w-14 h-14 rounded-2xl bg-gray-200" />
-        )}
-        <div className="min-w-0">
-          <div className="font-medium text-base truncate">
-            {props.display_name || props.username || (props.fid ? `fid:${props.fid}` : "User")}
-          </div>
-          {props.username && (
-            <div className="text-sm text-gray-500 truncate">@{props.username}</div>
-          )}
-        </div>
+    <>
+      <div
+        ref={anchorRef}
+        className="flex items-center gap-2 min-w-0"
+        onMouseEnter={show}
+        onMouseLeave={() => hide(120)}
+        onClick={onClick}
+        onTouchStart={show}
+        onTouchEnd={() => hide(200)}
+      >
+        {children}
       </div>
-    </div>
+
+      {open && pos && (
+        <div
+          style={{ left: pos.left, top: pos.top, position: "fixed" }}
+          className="z-50 w-[300px] rounded-2xl border border-zinc-200 bg-white/95 shadow-lg ring-1 ring-black/5 p-4 pointer-events-none backdrop-blur-sm"
+          aria-hidden
+        >
+          <div className="flex items-center gap-3">
+            {c.pfp_url ? (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img
+                src={c.pfp_url}
+                alt=""
+                className="w-14 h-14 rounded-xl object-cover ring-1 ring-zinc-200"
+                referrerPolicy="no-referrer"
+              />
+            ) : (
+              <div className="w-14 h-14 rounded-xl bg-zinc-200" />
+            )}
+            <div className="min-w-0">
+              <div className="font-medium truncate text-zinc-900">
+                {c.display_name || "User"}
+              </div>
+              {c.username && (
+                <div className="text-sm text-zinc-500 truncate">@{c.username}</div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+    </>
   );
 }
 
-/* --------------------------------- Page --------------------------------- */
+/* ===========================
+   Page
+   =========================== */
 
 export default function Page() {
-  // filters (стартуем с By likes по твоей просьбе)
+  // стартуем By likes
   const [metric, setMetric] = useState<(typeof METRICS)[number]["key"]>("likes");
   const [range, setRange]   = useState<(typeof RANGES)[number]["key"]>("24h");
 
@@ -187,7 +209,6 @@ export default function Page() {
 
   // Init & context
   useEffect(() => {
-    let cancelled = false;
     let timers: Array<ReturnType<typeof setTimeout>> = [];
     let off: undefined | (() => void);
 
@@ -200,7 +221,6 @@ export default function Page() {
         const wantDebug = url.searchParams.get("debug") === "1";
 
         const inMini = await sdk.isInMiniApp();
-        if (cancelled) return;
         setIsMiniApp(inMini);
 
         if (!inMini) {
@@ -239,7 +259,7 @@ export default function Page() {
         let { added, fid } = compute(ctx);
         setViewerFid(typeof fid === "number" ? fid : null);
 
-        // Fallback to cache if added is undefined/false but cache says true
+        // fallback к локальному кэшу
         const cachedAdded = readAddedCache(typeof fid === "number" ? fid : null);
         if (added === undefined || added === false) {
           if (cachedAdded) {
@@ -273,7 +293,7 @@ export default function Page() {
           });
         }
 
-        // subscribe and schedule rechecks
+        // subscribe + rechecks
         const recheck = async () => {
           try {
             const c = await getCtx();
@@ -311,7 +331,7 @@ export default function Page() {
           const t = setTimeout(recheck, ms);
           timers.push(t);
         });
-      } catch (e) {
+      } catch {
         setIsMiniApp(false);
         setIsAdded(true);
         setViewerFid(null);
@@ -352,7 +372,7 @@ export default function Page() {
             ctx?.client?.added ??
             ctx?.miniApp?.added ??
             (Array.isArray(ctx?.client?.apps)
-              ? ctx.client.apps.some((a: any) => a?.id && a?.added)
+              ? ctx.client.apps.some((a: any) => a?.id и a?.added)
               : undefined);
           if (added === true) setIsAdded(true);
         } catch {}
@@ -388,20 +408,27 @@ export default function Page() {
     }
   };
 
+  // UI
   return (
-    <div className="mx-auto max-w-6xl px-4 py-6 pb-28">
+    <div
+      className={`
+        mx-auto max-w-6xl px-4 py-6 pb-28
+        bg-zinc-50
+        bg-[radial-gradient(1200px_500px_at_50%_-200px,rgba(0,0,0,0.05),transparent)]
+      `}
+    >
       {/* Gate #1: Add app */}
       {isMiniApp && !isAdded && (
         <div className="fixed inset-0 z-[60] bg-white/80 backdrop-blur-sm">
           <div className="absolute inset-x-0 bottom-0 p-4 pb-[max(env(safe-area-inset-bottom),1rem)]">
             <div className="mx-auto max-w-xl rounded-2xl border bg-white shadow-xl p-5">
               <h2 className="text-lg font-semibold mb-1">Add “Top Casts” to My Apps</h2>
-              <p className="text-sm text-gray-600 mb-4">
+              <p className="text-sm text-zinc-600 mb-4">
                 To continue, please add this mini app to your Warpcast apps.
               </p>
               <button
                 onClick={handleAddMiniApp}
-                className="w-full px-4 py-2 rounded-xl bg-black text-white text-sm hover:bg-gray-900"
+                className="w-full px-4 py-2 rounded-xl bg-black text-white text-sm hover:bg-zinc-900"
               >
                 Add to My Apps
               </button>
@@ -418,7 +445,7 @@ export default function Page() {
               <h2 className="text-lg font-semibold mb-1">
                 Follow {PROMO_HANDLE ? `@${PROMO_HANDLE}` : "our account"}
               </h2>
-              <p className="text-sm text-gray-600 mb-4">
+              <p className="text-sm text-zinc-600 mb-4">
                 Please follow to access the app.
               </p>
               <button
@@ -427,8 +454,8 @@ export default function Page() {
                 title={!viewerFid ? "Open inside Warpcast to continue" : undefined}
                 className={`w-full px-4 py-2 rounded-xl text-sm transition
                   ${followChecking || !viewerFid
-                    ? "bg-gray-200 text-gray-700 cursor-not-allowed"
-                    : "bg-black text-white hover:bg-gray-900"}`}
+                    ? "bg-zinc-200 text-zinc-700 cursor-not-allowed"
+                    : "bg-black text-white hover:bg-zinc-900"}`}
               >
                 {followChecking
                   ? "Waiting for follow…"
@@ -439,7 +466,7 @@ export default function Page() {
         </div>
       )}
 
-      <h1 className="text-2xl font-semibold mb-4">Top casts</h1>
+      <h1 className="text-4xl font-semibold tracking-tight mb-4 text-zinc-900">Top casts</h1>
 
       {/* filters */}
       <div className="flex gap-2 mb-3 flex-wrap">
@@ -447,9 +474,8 @@ export default function Page() {
           <button
             key={r.key}
             onClick={() => setRange(r.key)}
-            className={`px-3 py-1.5 rounded-full text-sm border ${
-              range === r.key ? "bg-black text-white border-black" : "bg-white hover:bg-gray-50"
-            }`}
+            className={`px-3 py-1.5 rounded-full text-sm border
+              ${range === r.key ? "bg-black text-white border-black" : "bg-white hover:bg-zinc-50"}`}
           >
             {r.label}
           </button>
@@ -461,87 +487,117 @@ export default function Page() {
           <button
             key={m.key}
             onClick={() => setMetric(m.key)}
-            className={`px-3 py-1.5 rounded-full text-sm border ${
-              metric === m.key ? "bg-black text-white border-black" : "bg-white hover:bg-gray-50"
-            }`}
+            className={`px-3 py-1.5 rounded-full text-sm border
+              ${metric === m.key ? "bg-black text-white border-black" : "bg-white hover:bg-zinc-50"}`}
           >
             {m.label}
           </button>
         ))}
       </div>
 
-      <div className="text-sm text-gray-500 mb-4">
-        {`Top casts · ${METRICS.find(m => m.key === metric)?.label.toLowerCase()} · ${RANGES.find(r => r.key === range)?.label}`}
-      </div>
+      <div className="text-sm text-zinc-500 mb-4">{title}</div>
 
       {error && <div className="text-red-600 mb-4">Error: {error}</div>}
-      {loading && <div className="mb-4">Loading…</div>}
+
+      {/* Skeletons */}
+      {loading && items.length === 0 && (
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+          {Array.from({ length: 6 }).map((_, i) => (
+            <div
+              key={i}
+              className="h-44 rounded-2xl border border-zinc-200 bg-white shadow-sm md:shadow-md p-4 animate-pulse"
+            >
+              <div className="h-4 w-16 bg-zinc-200 rounded mb-3" />
+              <div className="h-4 w-3/4 bg-zinc-200 rounded mb-2" />
+              <div className="h-4 w-2/3 bg-zinc-200 rounded mb-6" />
+              <div className="h-5 w-24 bg-zinc-200 rounded" />
+            </div>
+          ))}
+        </div>
+      )}
 
       {/* grid */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-        {items.map((c, idx) => {
-          const hover = useHoverCardAnchor();
+      {!loading && (
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+          {items.map((c, idx) => (
+            <article
+              key={c.cast_hash}
+              className={`
+                h-full rounded-2xl border border-zinc-200/80 bg-white
+                shadow-sm md:shadow-[0_10px_30px_rgba(0,0,0,0.06)]
+                transition hover:shadow-[0_14px_40px_rgba(0,0,0,0.08)] will-change-transform
+              `}
+            >
+              <div className="p-4 flex flex-col">
+                <header className="mb-3 flex items-center justify-between">
+                  <div className="text-xs text-zinc-500">#{idx + 1}</div>
 
-          return (
-            <article key={c.cast_hash} className="h-full rounded-2xl border bg-white shadow-sm p-4 flex flex-col">
-              <header className="mb-3 flex items-center justify-between">
-                <div className="text-xs text-gray-500">#{idx + 1}</div>
+                  {/* hover wrapper */}
+                  <AuthorHoverWrap c={c}>
+                    {c.pfp_url ? (
+                      // eslint-disable-next-line @next/next/no-img-element
+                      <img
+                        src={c.pfp_url}
+                        alt=""
+                        className="w-6 h-6 rounded-full object-cover ring-1 ring-zinc-200"
+                        referrerPolicy="no-referrer"
+                      />
+                    ) : (
+                      <div className="w-6 h-6 rounded-full bg-zinc-200" />
+                    )}
+                    <a
+                      className="text-sm font-medium hover:underline truncate"
+                      href={`https://warpcast.com/~/profiles/${c.fid}`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      title={`fid:${c.fid}`}
+                    >
+                      {c.display_name || (c.username ? `@${c.username}` : `fid:${c.fid}`)}
+                    </a>
+                  </AuthorHoverWrap>
 
-                {/* anchor for hover (avatar + name) */}
-                <div className="flex items-center gap-2 min-w-0" {...hover.attachProps}>
-                  {c.pfp_url ? (
-                    // eslint-disable-next-line @next/next/no-img-element
-                    <img src={c.pfp_url} alt="" className="w-6 h-6 rounded-full object-cover" referrerPolicy="no-referrer" />
-                  ) : (
-                    <div className="w-6 h-6 rounded-full bg-gray-200" />
-                  )}
-                  <span className="text-sm font-medium truncate">
-                    {c.display_name || (c.username ? `@${c.username}` : `fid:${c.fid}`)}
-                  </span>
                   {c.channel ? (
-                    <span className="ml-1 shrink-0 text-xs bg-gray-100 px-2 py-0.5 rounded-full">#{c.channel}</span>
+                    <span className="ml-1 shrink-0 text-xs text-zinc-600 bg-zinc-100 px-2 py-0.5 rounded-full">#{c.channel}</span>
                   ) : (
-                    <span className="ml-1 shrink-0 text-xs text-gray-400">no channel</span>
+                    <span className="ml-1 shrink-0 text-xs text-zinc-400">no channel</span>
                   )}
+                </header>
+
+                <p className="whitespace-pre-wrap text-sm leading-6 line-clamp-5 text-zinc-900">
+                  {c.text}
+                </p>
+
+                <div className="mt-3 text-xs text-zinc-600">
+                  <time title={new Date(c.timestamp).toLocaleString()}>
+                    {new Date(c.timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+                  </time>
                 </div>
 
-                {/* fixed right-aligned hover card */}
-                <ProfileCardFixed
-                  {...hover.cardProps}
-                  display_name={c.display_name}
-                  username={c.username || undefined}
-                  pfp_url={c.pfp_url || undefined}
-                  fid={c.fid}
-                />
-              </header>
+                <div className="mt-auto" />
 
-              <p className="whitespace-pre-wrap text-sm leading-5 line-clamp-6 text-gray-900">{c.text}</p>
-
-              <div className="mt-3 text-xs text-gray-600">
-                <time title={new Date(c.timestamp).toLocaleString()}>
-                  {new Date(c.timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
-                </time>
-              </div>
-
-              <div className="mt-auto" />
-
-              <div className="pt-3 flex items-center justify-between">
-                <div className="flex items-center gap-3 text-sm">
-                  <Badge label="💬" value={c.replies} active={metric === "replies"} />
-                  <Badge label="❤️" value={c.likes} active={metric === "likes"} />
-                  <Badge label="🔁" value={c.recasts} active={metric === "recasts"} />
+                <div className="pt-3 flex items-center justify-between">
+                  <div className="flex items-center gap-3 text-sm">
+                    <Badge label="💬" value={c.replies} active={metric === "replies"} />
+                    <Badge label="❤️" value={c.likes} active={metric === "likes"} />
+                    <Badge label="🔁" value={c.recasts} active={metric === "recasts"} />
+                  </div>
+                  <a
+                    className="text-blue-600 hover:underline text-sm shrink-0"
+                    href={makeCastUrl(c.cast_hash, c.username)}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                  >
+                    Open ↗
+                  </a>
                 </div>
-                <a className="text-blue-600 hover:underline text-sm shrink-0" href={makeCastUrl(c.cast_hash, c.username)} target="_blank" rel="noopener noreferrer">
-                  Open ↗
-                </a>
               </div>
             </article>
-          );
-        })}
-      </div>
+          ))}
+        </div>
+      )}
 
       {!loading && items.length === 0 && !error && (
-        <div className="text-gray-500 mt-6">Nothing here yet. Try again later.</div>
+        <div className="text-zinc-500 mt-6">Nothing here yet. Try again later.</div>
       )}
 
       {debugInfo && (
@@ -556,9 +612,8 @@ export default function Page() {
 function Badge({ label, value, active }: { label: string; value: number; active?: boolean }) {
   return (
     <span
-      className={`inline-flex items-center gap-1 px-2 py-1 rounded-full border text-xs ${
-        active ? "bg-black text-white border-black" : "bg-gray-50"
-      }`}
+      className={`inline-flex items-center gap-1 px-2 py-1 rounded-full border text-xs tabular-nums
+        ${active ? "bg-black text-white border-black" : "bg-zinc-50 border-zinc-200 text-zinc-700"}`}
     >
       <span>{label}</span>
       <span className="tabular-nums">{value ?? 0}</span>
