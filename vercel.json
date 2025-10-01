@@ -1,5 +1,12 @@
 {
   "crons": [
-    { "path": "/api/ingest", "schedule": "*/30 * * * *" }
+    {
+      "path": "/api/ingest?hours=24&includeExisting=1&pages=3",
+      "schedule": "0 */3 * * *"
+    },
+    {
+      "path": "/api/users/refresh",
+      "schedule": "15 */6 * * *"
+    }
   ]
 }
