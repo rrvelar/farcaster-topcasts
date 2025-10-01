@@ -1,1 +1,19 @@
 
+{
+  "name": "farcaster-topcasts",
+  "private": true,
+  "version": "0.1.0",
+  "scripts": {
+    "build": "next build",
+    "start": "next start",
+    "lint": "next lint"
+  },
+  "dependencies": {
+    "@farcaster/miniapp-sdk": "^0.1.0",
+    "@vercel/postgres": "0.8.0",
+    "next": "14.2.5",
+    "react": "18.3.1",
+    "react-dom": "18.3.1",
+    "zod": "3.23.8"
+  }
+}
