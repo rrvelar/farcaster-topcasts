@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, ReactNode } from "react";
 import { sdk } from "@farcaster/miniapp-sdk";
 
 type Cast = {
@@ -62,6 +62,97 @@ const writeAddedCache = (fid: number | null, val = true) => {
   } catch {}
 };
 
+/* ===========================
+   Smart hover (auto-flip)
+   =========================== */
+
+type TooltipPos = { left: number; top: number; side: "right" | "left" };
+
+function useSmartTooltip() {
+  const compute = useCallback((anchor: HTMLElement, tooltipWidth = 300): TooltipPos => {
+    const r = anchor.getBoundingClientRect();
+    const gap = 10;
+    const preferredLeft = r.right + gap;
+    const fallbackLeft  = r.left - tooltipWidth - gap;
+    const fitsRight = preferredLeft + tooltipWidth <= window.innerWidth - 8;
+    const left = fitsRight ? preferredLeft : Math.max(8, fallbackLeft);
+    const midY = r.top + r.height / 2;
+    // высота карточки ~140–160px, смещаем от середины
+    const top = Math.max(8, Math.min(midY - 72, window.innerHeight - 168));
+    return { left, top, side: fitsRight ? "right" : "left" };
+  }, []);
+  return { compute };
+}
+
+function AuthorHoverWrap({
+  c,
+  children,
+}: {
+  c: { fid: number; username?: string | null; display_name?: string | null; pfp_url?: string | null };
+  children: ReactNode;
+}) {
+  const anchorRef = useRef<HTMLDivElement | null>(null);
+  const { compute } = useSmartTooltip();
+  const [open, setOpen] = useState(false);
+  const [pos, setPos] = useState<TooltipPos | null>(null);
+
+  const show = () => {
+    const el = anchorRef.current;
+    if (!el) return;
+    setPos(compute(el, 300));
+    setOpen(true);
+  };
+  const hide = () => setOpen(false);
+  const toggleTap = () => (open ? hide() : show());
+
+  return (
+    <>
+      <div
+        ref={anchorRef}
+        className="flex items-center gap-2 min-w-0"
+        onMouseEnter={show}
+        onMouseLeave={hide}
+        onClick={toggleTap} // на мобилке — по тапу
+      >
+        {children}
+      </div>
+
+      {open && pos && (
+        <div
+          style={{ left: pos.left, top: pos.top, position: "fixed" }}
+          className="z-50 w-[300px] rounded-2xl border bg-white shadow-xl p-4 pointer-events-none"
+        >
+          <div className="flex items-center gap-3">
+            {c.pfp_url ? (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img
+                src={c.pfp_url}
+                alt=""
+                className="w-14 h-14 rounded-xl object-cover ring-1 ring-zinc-200"
+              />
+            ) : (
+              <div className="w-14 h-14 rounded-xl bg-zinc-200" />
+            )}
+            <div className="min-w-0">
+              <div className="font-medium truncate text-zinc-900">
+                {c.display_name || "User"}
+              </div>
+              {c.username && (
+                <div className="text-sm text-zinc-500 truncate">@{c.username}</div>
+              )}
+            </div>
+          </div>
+          {/* Никаких ссылок внутри ховера — убрано по твоей просьбе */}
+        </div>
+      )}
+    </>
+  );
+}
+
+/* ===========================
+   Page
+   =========================== */
+
 export default function Page() {
   // filters
   const [metric, setMetric] = useState<(typeof METRICS)[number]["key"]>("replies");
@@ -101,7 +192,6 @@ export default function Page() {
 
   // Init & context
   useEffect(() => {
-    let cancelled = false;
     let timers: Array<ReturnType<typeof setTimeout>> = [];
     let off: undefined | (() => void);
 
@@ -114,7 +204,6 @@ export default function Page() {
         const wantDebug = url.searchParams.get("debug") === "1";
 
         const inMini = await sdk.isInMiniApp();
-        if (cancelled) return;
         setIsMiniApp(inMini);
 
         if (!inMini) {
@@ -153,7 +242,7 @@ export default function Page() {
         let { added, fid } = compute(ctx);
         setViewerFid(typeof fid === "number" ? fid : null);
 
-        // Fallback to cache if added is undefined/false but cache says true
+        // fallback к локальному кэшу
         const cachedAdded = readAddedCache(typeof fid === "number" ? fid : null);
         if (added === undefined || added === false) {
           if (cachedAdded) {
@@ -187,7 +276,7 @@ export default function Page() {
           });
         }
 
-        // subscribe and schedule rechecks
+        // subscribe + rechecks (контекст иногда запаздывает)
         const recheck = async () => {
           try {
             const c = await getCtx();
@@ -217,16 +306,6 @@ export default function Page() {
                 setIsAdded(!!a);
               }
             }
-
-            if (wantDebug) {
-              setDebugInfo((d) => ({
-                ...(d || {}),
-                recheck: Date.now(),
-                addedReported: a,
-                cachedAddedNow: readAddedCache(viewerFid),
-                viewerFidNow: f ?? viewerFid,
-              }));
-            }
           } catch {}
         };
 
@@ -235,7 +314,7 @@ export default function Page() {
           const t = setTimeout(recheck, ms);
           timers.push(t);
         });
-      } catch (e) {
+      } catch {
         setIsMiniApp(false);
         setIsAdded(true);
         setViewerFid(null);
@@ -314,19 +393,19 @@ export default function Page() {
 
   // UI
   return (
-    <div className="mx-auto max-w-6xl px-4 py-6 pb-28">
+    <div className="mx-auto max-w-6xl px-4 py-6 pb-28 bg-zinc-50">
       {/* Gate #1: Add app */}
       {isMiniApp && !isAdded && (
         <div className="fixed inset-0 z-[60] bg-white/80 backdrop-blur-sm">
           <div className="absolute inset-x-0 bottom-0 p-4 pb-[max(env(safe-area-inset-bottom),1rem)]">
             <div className="mx-auto max-w-xl rounded-2xl border bg-white shadow-xl p-5">
               <h2 className="text-lg font-semibold mb-1">Add “Top Casts” to My Apps</h2>
-              <p className="text-sm text-gray-600 mb-4">
+              <p className="text-sm text-zinc-600 mb-4">
                 To continue, please add this mini app to your Warpcast apps.
               </p>
               <button
                 onClick={handleAddMiniApp}
-                className="w-full px-4 py-2 rounded-xl bg-black text-white text-sm hover:bg-gray-900"
+                className="w-full px-4 py-2 rounded-xl bg-black text-white text-sm hover:bg-zinc-900"
               >
                 Add to My Apps
               </button>
@@ -343,7 +422,7 @@ export default function Page() {
               <h2 className="text-lg font-semibold mb-1">
                 Follow {PROMO_HANDLE ? `@${PROMO_HANDLE}` : "our account"}
               </h2>
-              <p className="text-sm text-gray-600 mb-4">
+              <p className="text-sm text-zinc-600 mb-4">
                 Please follow to access the app.
               </p>
               <button
@@ -352,8 +431,8 @@ export default function Page() {
                 title={!viewerFid ? "Open inside Warpcast to continue" : undefined}
                 className={`w-full px-4 py-2 rounded-xl text-sm transition
                   ${followChecking || !viewerFid
-                    ? "bg-gray-200 text-gray-700 cursor-not-allowed"
-                    : "bg-black text-white hover:bg-gray-900"}`}
+                    ? "bg-zinc-200 text-zinc-700 cursor-not-allowed"
+                    : "bg-black text-white hover:bg-zinc-900"}`}
               >
                 {followChecking
                   ? "Waiting for follow…"
@@ -364,7 +443,7 @@ export default function Page() {
         </div>
       )}
 
-      <h1 className="text-2xl font-semibold mb-4">Top casts</h1>
+      <h1 className="text-3xl font-semibold tracking-tight mb-4 text-zinc-900">Top casts</h1>
 
       {/* filters */}
       <div className="flex gap-2 mb-3 flex-wrap">
@@ -372,9 +451,8 @@ export default function Page() {
           <button
             key={r.key}
             onClick={() => setRange(r.key)}
-            className={`px-3 py-1.5 rounded-full text-sm border ${
-              range === r.key ? "bg-black text-white border-black" : "bg-white hover:bg-gray-50"
-            }`}
+            className={`px-3 py-1.5 rounded-full text-sm border
+              ${range === r.key ? "bg-black text-white border-black" : "bg-white hover:bg-zinc-50"}`}
           >
             {r.label}
           </button>
@@ -386,104 +464,105 @@ export default function Page() {
           <button
             key={m.key}
             onClick={() => setMetric(m.key)}
-            className={`px-3 py-1.5 rounded-full text-sm border ${
-              metric === m.key ? "bg-black text-white border-black" : "bg-white hover:bg-gray-50"
-            }`}
+            className={`px-3 py-1.5 rounded-full text-sm border
+              ${metric === m.key ? "bg-black text-white border-black" : "bg-white hover:bg-zinc-50"}`}
           >
             {m.label}
           </button>
         ))}
       </div>
 
-      <div className="text-sm text-gray-500 mb-4">
-        {`Top casts · ${METRICS.find(m => m.key === metric)?.label.toLowerCase()} · ${RANGES.find(r => r.key === range)?.label}`}
-      </div>
+      <div className="text-sm text-zinc-500 mb-4">{title}</div>
 
       {error && <div className="text-red-600 mb-4">Error: {error}</div>}
-      {loading && <div className="mb-4">Loading…</div>}
+
+      {/* Skeletons */}
+      {loading && items.length === 0 && (
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+          {Array.from({ length: 6 }).map((_, i) => (
+            <div key={i} className="h-44 rounded-2xl border bg-white shadow-[0_1px_0_#e5e7eb] md:shadow-sm p-4 animate-pulse">
+              <div className="h-4 w-16 bg-zinc-200 rounded mb-3" />
+              <div className="h-4 w-3/4 bg-zinc-200 rounded mb-2" />
+              <div className="h-4 w-2/3 bg-zinc-200 rounded mb-6" />
+              <div className="h-5 w-24 bg-zinc-200 rounded" />
+            </div>
+          ))}
+        </div>
+      )}
 
       {/* grid */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-        {items.map((c, idx) => (
-          <article key={c.cast_hash} className="h-full rounded-2xl border bg-white shadow-sm p-4 flex flex-col">
-            <header className="mb-3 flex items-center justify-between">
-              <div className="text-xs text-gray-500">#{idx + 1}</div>
+      {!loading && (
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+          {items.map((c, idx) => (
+            <article key={c.cast_hash} className="h-full rounded-2xl border bg-white shadow-[0_1px_0_#e5e7eb] md:shadow-sm p-4 flex flex-col">
+              <header className="mb-3 flex items-center justify-between">
+                <div className="text-xs text-zinc-500">#{idx + 1}</div>
 
-              {/* блок с авой и ником + ХОВЕР БЕЗ ССЫЛОК */}
-              <div className="relative group flex items-center gap-2 min-w-0">
-                {c.pfp_url ? (
-                  // eslint-disable-next-line @next/next/no-img-element
-                  <img src={c.pfp_url} alt="" className="w-6 h-6 rounded-full object-cover" referrerPolicy="no-referrer" />
-                ) : (
-                  <div className="w-6 h-6 rounded-full bg-gray-200" />
-                )}
-
-                <span className="text-sm font-medium truncate">
-                  {c.display_name || (c.username ? `@${c.username}` : `fid:${c.fid}`)}
-                </span>
+                {/* Ховер-обёртка вокруг текущего контента (сохранил ссылку на профиль в заголовке) */}
+                <AuthorHoverWrap c={c}>
+                  {c.pfp_url ? (
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img
+                      src={c.pfp_url}
+                      alt=""
+                      className="w-6 h-6 rounded-full object-cover ring-1 ring-zinc-200"
+                      referrerPolicy="no-referrer"
+                    />
+                  ) : (
+                    <div className="w-6 h-6 rounded-full bg-zinc-200" />
+                  )}
+                  <a
+                    className="text-sm font-medium hover:underline truncate"
+                    href={`https://warpcast.com/~/profiles/${c.fid}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    title={`fid:${c.fid}`}
+                  >
+                    {c.display_name || (c.username ? `@${c.username}` : `fid:${c.fid}`)}
+                  </a>
+                </AuthorHoverWrap>
 
                 {c.channel ? (
-                  <span className="ml-1 shrink-0 text-xs bg-gray-100 px-2 py-0.5 rounded-full">#{c.channel}</span>
+                  <span className="ml-1 shrink-0 text-xs text-zinc-600 bg-zinc-100 px-2 py-0.5 rounded-full">#{c.channel}</span>
                 ) : (
-                  <span className="ml-1 shrink-0 text-xs text-gray-400">no channel</span>
+                  <span className="ml-1 shrink-0 text-xs text-zinc-400">no channel</span>
                 )}
+              </header>
 
-                {/* Hover panel (NO profile link) */}
-                <div
-                  className="pointer-events-none absolute left-0 top-8 z-20 hidden w-64 rounded-2xl border bg-white p-3 shadow-xl group-hover:block"
-                >
-                  <div className="flex items-start gap-3">
-                    {c.pfp_url ? (
-                      // eslint-disable-next-line @next/next/no-img-element
-                      <img
-                        src={c.pfp_url}
-                        alt=""
-                        className="w-16 h-16 rounded-xl object-cover"
-                        referrerPolicy="no-referrer"
-                      />
-                    ) : (
-                      <div className="w-16 h-16 rounded-xl bg-gray-200" />
-                    )}
-                    <div className="min-w-0">
-                      <div className="font-semibold truncate">
-                        {c.display_name || (c.username ? `@${c.username}` : `fid:${c.fid}`)}
-                      </div>
-                      {c.username && (
-                        <div className="text-sm text-gray-500 truncate">@{c.username}</div>
-                      )}
-                      {/* тут можем показывать followers, если когда-нибудь добавим в API */}
-                    </div>
-                  </div>
+              <p className="whitespace-pre-wrap text-sm leading-6 line-clamp-5 text-zinc-900">
+                {c.text}
+              </p>
+
+              <div className="mt-3 text-xs text-zinc-600">
+                <time title={new Date(c.timestamp).toLocaleString()}>
+                  {new Date(c.timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+                </time>
+              </div>
+
+              <div className="mt-auto" />
+
+              <div className="pt-3 flex items-center justify-between">
+                <div className="flex items-center gap-3 text-sm">
+                  <Badge label="💬" value={c.replies} active={metric === "replies"} />
+                  <Badge label="❤️" value={c.likes} active={metric === "likes"} />
+                  <Badge label="🔁" value={c.recasts} active={metric === "recasts"} />
                 </div>
+                <a
+                  className="text-blue-600 hover:underline text-sm shrink-0"
+                  href={makeCastUrl(c.cast_hash, c.username)}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                >
+                  Open ↗
+                </a>
               </div>
-            </header>
-
-            <p className="whitespace-pre-wrap text-sm leading-5 line-clamp-6 text-gray-900">{c.text}</p>
-
-            <div className="mt-3 text-xs text-gray-600">
-              <time title={new Date(c.timestamp).toLocaleString()}>
-                {new Date(c.timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
-              </time>
-            </div>
-
-            <div className="mt-auto" />
-
-            <div className="pt-3 flex items-center justify-between">
-              <div className="flex items-center gap-3 text-sm">
-                <Badge label="💬" value={c.replies} active={metric === "replies"} />
-                <Badge label="❤️" value={c.likes} active={metric === "likes"} />
-                <Badge label="🔁" value={c.recasts} active={metric === "recasts"} />
-              </div>
-              <a className="text-blue-600 hover:underline text-sm shrink-0" href={makeCastUrl(c.cast_hash, c.username)} target="_blank" rel="noopener noreferrer">
-                Open ↗
-              </a>
-            </div>
-          </article>
-        ))}
-      </div>
+            </article>
+          ))}
+        </div>
+      )}
 
       {!loading && items.length === 0 && !error && (
-        <div className="text-gray-500 mt-6">Nothing here yet. Try again later.</div>
+        <div className="text-zinc-500 mt-6">Nothing here yet. Try again later.</div>
       )}
 
       {debugInfo && (
@@ -498,9 +577,8 @@ export default function Page() {
 function Badge({ label, value, active }: { label: string; value: number; active?: boolean }) {
   return (
     <span
-      className={`inline-flex items-center gap-1 px-2 py-1 rounded-full border text-xs ${
-        active ? "bg-black text-white border-black" : "bg-gray-50"
-      }`}
+      className={`inline-flex items-center gap-1 px-2 py-1 rounded-full border text-xs tabular-nums
+        ${active ? "bg-black text-white border-black" : "bg-zinc-50 border-zinc-200 text-zinc-700"}`}
     >
       <span>{label}</span>
       <span className="tabular-nums">{value ?? 0}</span>
