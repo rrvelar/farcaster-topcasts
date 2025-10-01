@@ -37,6 +37,7 @@ export const revalidate = 0;
 export async function GET() {
   if (!KEY) return NextResponse.json({ error: "NEYNAR_API_KEY missing" }, { status: 500 });
 
+  // 1) тянем все свежие касты за последние 24 часа
   let cursor: string | undefined;
   const all: any[] = [];
   do {
@@ -45,6 +46,7 @@ export async function GET() {
     cursor = page.cursor;
   } while (cursor);
 
+  // 2) берём счётчики реакций батчами по 100
   const B = 100;
   const counts: any[] = [];
   for (let i = 0; i < all.length; i += B) {
@@ -54,6 +56,7 @@ export async function GET() {
     counts.push(...cc);
   }
 
+  // 3) мержим и готовим строки для upsert
   const byHash = new Map(all.map((c) => [c.hash, c]));
   const rows = counts.map((r) => {
     const c = byHash.get(r.cast_hash) || {};
@@ -71,6 +74,7 @@ export async function GET() {
     };
   });
 
+  // 4) upsert в Supabase (Postgres)
   if (rows.length) {
     const values = rows.map((_, i) =>
       `($${i*9+1}, $${i*9+2}, $${i*9+3}, $${i*9+4}, $${i*9+5}, $${i*9+6}, $${i*9+7}, $${i*9+8}, $${i*9+9})`
@@ -79,7 +83,7 @@ export async function GET() {
       r.cast_hash, r.fid, r.text, r.channel, r.timestamp, r.likes, r.recasts, r.replies, r.score
     ]);
 
-    await sql.query(
+    await sql.unsafe(
       `
       insert into top_casts
       (cast_hash, fid, text, channel, timestamp, likes, recasts, replies, score)
@@ -100,4 +104,3 @@ export async function GET() {
 
   return NextResponse.json({ upserted: rows.length });
 }
-
