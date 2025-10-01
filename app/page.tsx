@@ -63,22 +63,24 @@ const writeAddedCache = (fid: number | null, val = true) => {
 };
 
 /* ===========================
-   Smart hover (auto-flip)
+   Smart hover (fixed below + right-aligned)
    =========================== */
 
-type TooltipPos = { left: number; top: number; side: "right" | "left" };
+type TooltipPos = { left: number; top: number };
 
 function useSmartTooltip() {
   const compute = useCallback((anchor: HTMLElement, tooltipWidth = 300): TooltipPos => {
     const r = anchor.getBoundingClientRect();
-    const gap = 10;
-    const preferredLeft = r.right + gap;
-    const fallbackLeft  = r.left - tooltipWidth - gap;
-    const fitsRight = preferredLeft + tooltipWidth <= window.innerWidth - 8;
-    const left = fitsRight ? preferredLeft : Math.max(8, fallbackLeft);
-    const midY = r.top + r.height / 2;
-    const top = Math.max(8, Math.min(midY - 72, window.innerHeight - 168));
-    return { left, top, side: fitsRight ? "right" : "left" };
+    const margin = 12;               // поле от краёв вьюпорта
+    const offsetY = 8;               // насколько ниже ника показывать
+    // стараемся прижать к правому краю, но не выезжать
+    const maxLeft = window.innerWidth - tooltipWidth - margin;
+    // базово ставим левую грань под начало ника
+    const baseLeft = r.left;
+    // а теперь ограничим вправо (к краю), но не позволим уйти левее поля
+    const left = Math.max(margin, Math.min(maxLeft, baseLeft));
+    const top  = Math.min(r.bottom + offsetY, window.innerHeight - 160); // не уезжать за низ
+    return { left, top };
   }, []);
   return { compute };
 }
@@ -109,14 +111,9 @@ function AuthorHoverWrap({
   };
 
   const onClick = (e: React.MouseEvent) => {
-    // не трогаем клики по ссылкам внутри
     const target = e.target as HTMLElement;
     if (target.closest("a")) return;
-    setOpen((v) => {
-      if (v) return false;
-      show();
-      return true;
-    });
+    setOpen(v => (v ? false : (show(), true)));
   };
 
   return (
@@ -136,7 +133,7 @@ function AuthorHoverWrap({
       {open && pos && (
         <div
           style={{ left: pos.left, top: pos.top, position: "fixed" }}
-          className="z-50 w-[300px] rounded-2xl border border-zinc-200 bg-white/95 shadow-lg ring-1 ring-black/5 p-4 pointer-events-none backdrop-blur-sm"
+          className="z-50 w-[300px] rounded-2xl border border-zinc-200 bg-white/95 shadow-[0_18px_50px_rgba(0,0,0,0.18)] ring-1 ring-black/5 p-4 pointer-events-none backdrop-blur-sm"
           aria-hidden
         >
           <div className="flex items-center gap-3">
@@ -501,11 +498,11 @@ export default function Page() {
 
       {/* Skeletons */}
       {loading && items.length === 0 && (
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
           {Array.from({ length: 6 }).map((_, i) => (
             <div
               key={i}
-              className="h-44 rounded-2xl border border-zinc-200 bg-white shadow-sm md:shadow-md p-4 animate-pulse"
+              className="h-44 rounded-3xl border border-zinc-200 bg-white shadow-[0_12px_36px_rgba(0,0,0,0.08)] p-5 animate-pulse"
             >
               <div className="h-4 w-16 bg-zinc-200 rounded mb-3" />
               <div className="h-4 w-3/4 bg-zinc-200 rounded mb-2" />
@@ -518,17 +515,17 @@ export default function Page() {
 
       {/* grid */}
       {!loading && (
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
           {items.map((c, idx) => (
             <article
               key={c.cast_hash}
               className={`
-                h-full rounded-2xl border border-zinc-200/80 bg-white
-                shadow-sm md:shadow-[0_10px_30px_rgba(0,0,0,0.06)]
-                transition hover:shadow-[0_14px_40px_rgba(0,0,0,0.08)] will-change-transform
+                h-full rounded-3xl border border-zinc-200/80 bg-white
+                shadow-[0_14px_44px_rgba(0,0,0,0.10)]
+                transition hover:shadow-[0_20px_60px_rgba(0,0,0,0.14)] will-change-transform
               `}
             >
-              <div className="p-4 flex flex-col">
+              <div className="p-5 flex flex-col">
                 <header className="mb-3 flex items-center justify-between">
                   <div className="text-xs text-zinc-500">#{idx + 1}</div>
 
@@ -539,11 +536,11 @@ export default function Page() {
                       <img
                         src={c.pfp_url}
                         alt=""
-                        className="w-6 h-6 rounded-full object-cover ring-1 ring-zinc-200"
+                        className="w-7 h-7 rounded-full object-cover ring-1 ring-zinc-200"
                         referrerPolicy="no-referrer"
                       />
                     ) : (
-                      <div className="w-6 h-6 rounded-full bg-zinc-200" />
+                      <div className="w-7 h-7 rounded-full bg-zinc-200" />
                     )}
                     <a
                       className="text-sm font-medium hover:underline truncate"
@@ -563,7 +560,7 @@ export default function Page() {
                   )}
                 </header>
 
-                <p className="whitespace-pre-wrap text-sm leading-6 line-clamp-5 text-zinc-900">
+                <p className="whitespace-pre-wrap text-[15px] leading-6 line-clamp-5 text-zinc-900">
                   {c.text}
                 </p>
 
