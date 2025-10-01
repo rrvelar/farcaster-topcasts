@@ -8,7 +8,7 @@
     "buttonTitle": "Open Top Casts",
     "splashImageUrl": "https://farcaster-topcasts.vercel.app/splash.png",
     "splashBackgroundColor": "#FFFFFF",
-    "subtitle": "Daily ranking of the most engaged Farcaster casts",
+    "subtitle": "Daily ranking of casts",
     "description": "See the best Farcaster casts at a glance. We track replies, likes and recasts, aggregate the last 24 hours and rank posts by engagement",
     "primaryCategory": "social",
     "screenshotUrls": [
