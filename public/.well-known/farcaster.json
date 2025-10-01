@@ -1,4 +1,11 @@
 {
+  "accountAssociation": {
+    "header": "eyJmaWQiOjIzMzgwLCJ0eXBlIjoiYXV0aCIsImtleSI6IjB4Yzk3OTYwQ2M1NkVDOUFkYzNkMjlhRWJjMkNlMDU1ZmM4MjJkRTI1NCJ9",
+    "payload": "eyJkb21haW4iOiJmYXJjYXN0ZXItdG9wY2FzdHMudmVyY2VsLmFwcCJ9",
+    "signature": "qK2tTT4/YE53EEcgMt9obeMYoTdOYGkLgBmc0N60VK5MwntMoxkeAlGwwZspbEnnzABeIsxcoC3flh1Yb6ogUxs="
+  }
+}
+{
   "miniapp": {
     "version": "1",
     "name": "Top Casts",
