@@ -1,40 +1,48 @@
+// app/api/top/route.ts
 import { NextResponse } from "next/server";
 import { sql } from "../../_db";
 
+/**
+ * /api/top?by=likes|replies|recasts|score&limit=15&hours=24
+ * Возвращает топ кастов за окно часов с данными автора.
+ */
 export const revalidate = 0;
 
-function whereByRange(range: string) {
-  switch (range) {
-    case "today": return `timestamp >= date_trunc('day', now())`;
-    case "yesterday": return `timestamp >= date_trunc('day', now()) - interval '1 day' and timestamp < date_trunc('day', now())`;
-    case "7d": return `timestamp >= now() - interval '7 days'`;
-    default: return `timestamp >= now() - interval '24 hours'`;
-  }
-}
-
 export async function GET(req: Request) {
-  const { searchParams } = new URL(req.url);
-  const metric = (searchParams.get("metric") ?? "replies").replace(/[^a-z]/g, "");
-  const range = (searchParams.get("range") ?? "24h").replace(/[^a-z0-9]/g, "");
-  const limit = Math.min(50, Math.max(1, Number(searchParams.get("limit") ?? 15)));
-  const order = ["likes","recasts","replies","score"].includes(metric) ? metric : "replies";
-  const where = whereByRange(range);
+  try {
+    const url = new URL(req.url);
+    const by = (url.searchParams.get("by") || "replies").toLowerCase();
+    const limit = Math.max(1, Math.min(50, Number(url.searchParams.get("limit") || "15")));
+    const hours = Math.max(1, Math.min(168, Number(url.searchParams.get("hours") || "24")));
 
-  const q = `
-    with top as (
-      select cast_hash, fid, text, channel, timestamp, likes, recasts, replies, score
-      from top_casts
-      where ${where}
-        and coalesce(length(text),0) > 0
-        and text !~* '(you just received 1,004 claps|join the fun|swipe right to clap|explore content)'
-      order by ${order} desc, timestamp desc
-      limit $1
-    )
-    select t.*, u.username, u.display_name, u.pfp_url
-    from top t
-    left join fc_users u on u.fid = t.fid
-  `;
-  const rows = await sql.unsafe(q, [limit]);
+    const allowed = new Set(["likes", "recasts", "replies", "score"]);
+    const orderCol = allowed.has(by) ? by : "replies";
 
-  return NextResponse.json({ items: rows });
+    const rows = await sql.unsafe(
+      `
+      select
+        t.cast_hash,
+        t.fid,
+        t.text,
+        t.channel,
+        t.timestamp,
+        t.likes,
+        t.recasts,
+        t.replies,
+        coalesce(t.score, (coalesce(t.replies,0)*10 + coalesce(t.recasts,0)*3 + coalesce(t.likes,0))) as score,
+        u.username,
+        u.display_name,
+        u.pfp_url
+      from top_casts t
+      left join users u on u.fid = t.fid
+      where t.timestamp >= now() - interval '${hours} hours'
+      order by ${orderCol} desc nulls last, timestamp desc
+      limit ${limit}
+      `
+    );
+
+    return NextResponse.json({ items: rows, orderBy: orderCol, hours, count: rows.length });
+  } catch (e: any) {
+    return NextResponse.json({ error: String(e?.message || e) }, { status: 500 });
+  }
 }
