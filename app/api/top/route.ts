@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { sql } from "@/app/_db";
+import { sql } from "../../_db";
 
 export const revalidate = 0;
 
