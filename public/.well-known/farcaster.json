@@ -10,9 +10,9 @@
     "screenshotUrls": [
       "https://farcaster-topcasts.vercel.app/shot-1.png"
     ],
-    "imageUrl": "https://farcaster-topcasts.vercel.app/og.png",
-    "heroImageUrl": "https://farcaster-topcasts.vercel.app/og.png",
-    "splashImageUrl": "https://farcaster-topcasts.vercel.app/icon-512.png",
+    "imageUrl": "https://farcaster-topcasts.vercel.app/preview.png",
+    "heroImageUrl": "https://farcaster-topcasts.vercel.app/hero.png",
+    "splashImageUrl": "https://farcaster-topcasts.vercel.app/splash.png",
     "splashBackgroundColor": "#FFFFFF",
     "tags": [
       "farcaster",
@@ -28,9 +28,11 @@
     "ogImageUrl": "https://farcaster-topcasts.vercel.app/og.png",
     "castShareUrl": "https://farcaster-topcasts.vercel.app"
   },
+  {
   "accountAssociation": {
     "header": "eyJmaWQiOjIzMzgwLCJ0eXBlIjoiYXV0aCIsImtleSI6IjB4Yzk3OTYwQ2M1NkVDOUFkYzNkMjlhRWJjMkNlMDU1ZmM4MjJkRTI1NCJ9",
-    "payload": "eyJkb21haW4iOiIifQ",
-    "signature": "pMxNoPzhl5K4bp6txYgdFCqQU6Q70xDGW2MpzOjGHUlzP4gP0PCjWFaQaw+WbCBXNDd6kZvvIAdMJ7ON/rdwTBw="
+    "payload": "eyJkb21haW4iOiJmYXJjYXN0ZXItdG9wY2FzdHMudmVyY2VsLmFwcCJ9",
+    "signature": "qK2tTT4/YE53EEcgMt9obeMYoTdOYGkLgBmc0N60VK5MwntMoxkeAlGwwZspbEnnzABeIsxcoC3flh1Yb6ogUxs="
   }
+ }
 }
