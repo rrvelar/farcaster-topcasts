@@ -23,12 +23,13 @@
     "ogImageUrl": "https://farcaster-topcasts.vercel.app/og.png",
 
     "castShareUrl": "https://warpcast.com/~/compose?text=Check+out+Top+Casts"
-     }
-}
-{
+     },
+  {
   "accountAssociation": {
     "header": "eyJmaWQiOjIzMzgwLCJ0eXBlIjoiY3VzdG9keSIsImtleSI6IjB4YjZhNDY3MDRiNmU5MERkNmNlZTZDQmI5RjQ5Q2MyMzVFNzlhOTZlMiJ9",
     "payload": "eyJkb21haW4iOiJmYXJjYXN0ZXItdG9wY2FzdHMudmVyY2VsLmFwcCJ9",
     "signature": "MHgxYWZjYzQwNjRkN2Q0YjFlNjgyNGMzMDA3YThmNDQ4YzNjNzM0MjFlN2NhYjQwMzBkZThkNzI2NDA0YjRmOTg2NTBmODIzNzUwNzRmMDI5ZDRjMTM3NzJjMDRmZjMzMDBhOWNlZGI1NDE5Y2Y3N2I5OWQwMmZmYWZkOTg0ZjVhYzFi"
   }
+ 
 }
+
