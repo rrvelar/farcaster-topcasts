@@ -2,7 +2,7 @@
   "miniapp": {
     "version": "1",
     "name": "Top Casts",
-    "homeUrl": "https://farcaster-topcasts.vercel.app",
+    "homeUrl": "https://farcaster-topcasts.vercel.app/",
     "iconUrl": "https://farcaster-topcasts.vercel.app/icon-512.png",
     "splashImageUrl": "https://farcaster-topcasts.vercel.app/splash-1024.png",
     "splashBackgroundColor": "#FFFFFF",
