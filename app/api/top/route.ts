@@ -1,5 +1,5 @@
-import { sql } from "@/app/_db";
 import { NextResponse } from "next/server";
+import { sql } from "@/app/_db";
 
 export const revalidate = 0;
 
@@ -32,7 +32,6 @@ export async function GET(req: Request) {
     order by ${order} desc
     limit 3000
   `;
-  const { rows } = await sql.query(q);
+  const rows = await sql.unsafe(q);
   return NextResponse.json({ items: rows });
 }
-
