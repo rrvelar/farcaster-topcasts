@@ -1,10 +1,11 @@
+// app/page.tsx
 "use client";
-import { useEffect, useMemo, useState } from "react";
-import { sdk } from "@farcaster/miniapp-sdk";
 
-type Item = {
+import { useEffect, useMemo, useState } from "react";
+
+type Cast = {
   cast_hash: string;
-  fid: number | null;
+  fid: number;
   text: string;
   channel: string | null;
   timestamp: string;
@@ -13,162 +14,165 @@ type Item = {
   replies: number;
   score: number;
 };
-type Metric = "likes" | "replies" | "recasts";
-type Range = "24h" | "today" | "yesterday" | "7d";
 
-const METRIC_LABELS: Record<Metric, string> = {
-  likes: "По лайкам",
-  replies: "По реплаям",
-  recasts: "По рекастам",
-};
-const RANGE_LABELS: Record<Range, string> = {
-  "24h": "24 часа",
-  "today": "Сегодня",
-  "yesterday": "Вчера",
-  "7d": "7 дней",
-};
+const METRICS = [
+  { key: "likes", label: "По лайкам" },
+  { key: "replies", label: "По реплаям" },
+  { key: "recasts", label: "По рекастам" },
+] as const;
+
+const RANGES = [
+  { key: "24h", label: "24 часа" },
+  { key: "today", label: "Сегодня" },
+  { key: "yesterday", label: "Вчера" },
+  { key: "7d", label: "7 дней" },
+] as const;
 
 export default function Page() {
-  const [metric, setMetric] = useState<Metric>("likes");
-  const [range, setRange] = useState<Range>("24h");
-  const [items, setItems] = useState<Item[]>([]);
+  const [metric, setMetric] = useState<(typeof METRICS)[number]["key"]>("replies");
+  const [range, setRange] = useState<(typeof RANGES)[number]["key"]>("24h");
   const [loading, setLoading] = useState(false);
-  const [page, setPage] = useState(1);
-  const perPage = 12;
+  const [items, setItems] = useState<Cast[]>([]);
+  const [error, setError] = useState<string | null>(null);
 
-  // Сообщаем Warpcast Mini App-контейнеру, что UI готов
-  useEffect(() => {
-    (async () => { try { await sdk.actions.ready(); } catch {} })();
-  }, []);
-
-  async function load(m: Metric, r: Range) {
+  async function load() {
     setLoading(true);
+    setError(null);
     try {
-      const res = await fetch(`/api/top?metric=${m}&range=${r}`, { cache: "no-store" });
-      const data = await res.json();
+      const url = `/api/top?metric=${metric}&range=${range}&limit=15`;
+      const r = await fetch(url, { cache: "no-store" });
+      if (!r.ok) throw new Error(await r.text());
+      const data = await r.json();
       setItems(Array.isArray(data.items) ? data.items : []);
-      setPage(1);
+    } catch (e: any) {
+      setError(String(e?.message || e));
     } finally {
       setLoading(false);
     }
   }
 
-  useEffect(() => { load(metric, range); }, [metric, range]);
+  useEffect(() => {
+    load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [metric, range]);
 
-  const groupedEntries = useMemo(() => {
-    const map = new Map<string, Item[]>();
-    for (const it of items) {
-      const key = it.channel ?? "Без канала";
-      const arr = map.get(key) ?? [];
-      if (arr.length < 10) arr.push(it); // сервер уже отсортировал
-      map.set(key, arr);
-    }
-    const entries = Array.from(map.entries()).sort((a, b) => {
-      const [A] = a[1]; const [B] = b[1];
-      const get = (x: Item) => metric === "likes" ? x.likes : metric === "recasts" ? x.recasts : x.replies;
-      return (get(B) || 0) - (get(A) || 0);
-    });
-    return entries;
-  }, [items, metric]);
-
-  const totalTiles = groupedEntries.length;
-  const totalPages = Math.max(1, Math.ceil(totalTiles / perPage));
-  const pageEntries = groupedEntries.slice((page - 1) * perPage, page * perPage);
+  const title = useMemo(() => {
+    const m = METRICS.find((m) => m.key === metric)?.label ?? "";
+    const r = RANGES.find((r) => r.key === range)?.label ?? "";
+    return `Топ кастов · ${m.toLowerCase()} · ${r}`;
+  }, [metric, range]);
 
   return (
-    <main style={{ padding: 24, maxWidth: 1200, margin: "0 auto" }}>
-      <header style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16 }}>
-        <h1 style={{ fontSize: 28, margin: 0 }}>Топ кастов</h1>
-        <div style={{ display: "flex", gap: 8 }}>
-          {(["likes","replies","recasts"] as Metric[]).map((m) => (
-            <button key={m} onClick={() => setMetric(m)} style={chip(metric === m)}>
-              {METRIC_LABELS[m]}
-            </button>
-          ))}
-        </div>
-      </header>
+    <div className="mx-auto max-w-6xl px-4 py-6">
+      <h1 className="text-2xl font-semibold mb-4">Топ кастов</h1>
 
-      <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
-        {(["24h","today","yesterday","7d"] as Range[]).map(r => (
-          <button key={r} onClick={() => setRange(r)} style={chip(range === r)}>
-            {RANGE_LABELS[r]}
+      {/* переключатели диапазона */}
+      <div className="flex gap-2 mb-3">
+        {RANGES.map(r => (
+          <button
+            key={r.key}
+            onClick={() => setRange(r.key)}
+            className={`px-3 py-1.5 rounded-full text-sm border ${
+              range === r.key ? "bg-black text-white border-black" : "bg-white hover:bg-gray-50"
+            }`}
+          >
+            {r.label}
           </button>
         ))}
       </div>
 
-      {loading && <div style={{ margin: "16px 0", color: "#6b7280" }}>Загружаю…</div>}
+      {/* переключатели метрики */}
+      <div className="flex gap-2 mb-6">
+        {METRICS.map(m => (
+          <button
+            key={m.key}
+            onClick={() => setMetric(m.key)}
+            className={`px-3 py-1.5 rounded-full text-sm border ${
+              metric === m.key ? "bg-black text-white border-black" : "bg-white hover:bg-gray-50"
+            }`}
+          >
+            {m.label}
+          </button>
+        ))}
+      </div>
 
-      {!loading && pageEntries.length === 0 && (
-        <div style={{ marginTop: 24, color: "#6b7280" }}>
-          Пусто для выбранного диапазона. Открой <code>/api/ingest</code> или дождись крона.
-        </div>
+      <div className="text-sm text-gray-500 mb-4">{title}</div>
+
+      {error && (
+        <div className="text-red-600 mb-4">Ошибка: {error}</div>
       )}
 
-      <section style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(320px, 1fr))", gap: 16 }}>
-        {pageEntries.map(([channel, list]) => (
-          <article key={channel} style={{
-            border: "1px solid #e5e7eb", borderRadius: 16, padding: 16, background: "#fff",
-            boxShadow: "0 1px 2px rgba(0,0,0,0.04)"
-          }}>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 8 }}>
-              <h2 style={{ fontSize: 18, margin: 0, lineHeight: 1.2 }}>
-                {channel === "Без канала" ? channel : `#${channel}`}
-              </h2>
-              <small style={{ color: "#6b7280" }}>
-                ТОП-10 · {METRIC_LABELS[metric].toLowerCase()} · {RANGE_LABELS[range]}
-              </small>
+      {loading && (
+        <div className="mb-4">Загрузка…</div>
+      )}
+
+      {/* сетка с карточками: 1 карточка = 1 каст */}
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+        {items.map((c, idx) => (
+          <article key={c.cast_hash} className="border rounded-xl p-4 bg-white shadow-sm">
+            <header className="flex items-center justify-between mb-2">
+              <div className="text-xs text-gray-500">#{idx + 1}</div>
+              {c.channel ? (
+                <span className="text-xs bg-gray-100 px-2 py-0.5 rounded-full">#{c.channel}</span>
+              ) : (
+                <span className="text-xs text-gray-400">без канала</span>
+              )}
+            </header>
+
+            <p className="whitespace-pre-wrap text-sm leading-5 mb-3 line-clamp-6">
+              {c.text}
+            </p>
+
+            <div className="flex items-center gap-3 text-xs text-gray-600 mb-3">
+              <span>fid:{c.fid}</span>
+              <span>·</span>
+              <time title={new Date(c.timestamp).toLocaleString()}>
+                {new Date(c.timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+              </time>
             </div>
 
-            <ol style={{ margin: 0, paddingLeft: 20 }}>
-              {list.map((it, idx) => (
-                <li key={it.cast_hash} style={{ marginBottom: 10 }}>
-                  <div style={{ display: "flex", alignItems: "baseline", gap: 8 }}>
-                    <span style={{ color: "#6b7280", minWidth: 18 }}>{idx + 1}.</span>
-                    <div style={{ flex: 1 }}>
-                      <div style={{ fontSize: 14, whiteSpace: "pre-wrap" }}>
-                        {truncate(it.text || "(без текста)", 140)}
-                      </div>
-                      <div style={{ display: "flex", gap: 10, fontSize: 12, color: "#6b7280", marginTop: 4 }}>
-                        <span>fid:{it.fid ?? "?"}</span>
-                        <span>💬 {it.replies}</span>
-                        <span>🔁 {it.recasts}</span>
-                        <span>❤️ {it.likes}</span>
-                        <a href={`https://warpcast.com/~/conversations/${it.cast_hash}`} target="_blank" rel="noreferrer" style={{ textDecoration: "none" }}>
-                          Открыть ↗
-                        </a>
-                      </div>
-                    </div>
-                  </div>
-                </li>
-              ))}
-            </ol>
+            <div className="flex items-center gap-3 text-sm mb-3">
+              <Badge label="💬" value={c.replies} active={metric === "replies"} />
+              <Badge label="❤️" value={c.likes} active={metric === "likes"} />
+              <Badge label="🔁" value={c.recasts} active={metric === "recasts"} />
+            </div>
+
+            <footer className="flex items-center justify-between">
+              <a
+                className="text-blue-600 hover:underline text-sm"
+                href={`https://warpcast.com/~/casts/${c.cast_hash}`}
+                target="_blank"
+                rel="noreferrer"
+              >
+                Открыть ↗
+              </a>
+              <a
+                className="text-gray-500 hover:underline text-xs"
+                href={`https://warpcast.com/~/profiles/${c.fid}`}
+                target="_blank"
+                rel="noreferrer"
+              >
+                профиль
+              </a>
+            </footer>
           </article>
         ))}
-      </section>
+      </div>
 
-      {totalPages > 1 && (
-        <div style={{ display: "flex", justifyContent: "center", gap: 8, marginTop: 16 }}>
-          <button disabled={page <= 1} onClick={() => setPage(p => Math.max(1, p - 1))} style={pagerBtn(page <= 1)}>← Назад</button>
-          <span style={{ alignSelf: "center", color: "#6b7280" }}>{page} / {totalPages}</span>
-          <button disabled={page >= totalPages} onClick={() => setPage(p => Math.min(totalPages, p + 1))} style={pagerBtn(page >= totalPages)}>Вперёд →</button>
-        </div>
+      {!loading && items.length === 0 && !error && (
+        <div className="text-gray-500 mt-6">Пока пусто. Зайди позже или запусти сбор вручную.</div>
       )}
-    </main>
+    </div>
   );
 }
 
-function truncate(s: string, n: number) { return s.length <= n ? s : s.slice(0, n - 1) + "…"; }
-function chip(active: boolean): React.CSSProperties {
-  return {
-    padding: "8px 12px", borderRadius: 999, border: "1px solid #e5e7eb",
-    background: active ? "#111827" : "#fff", color: active ? "#fff" : "#111827",
-    cursor: "pointer", fontWeight: 600
-  };
+function Badge({ label, value, active }: { label: string; value: number; active?: boolean }) {
+  return (
+    <span className={`inline-flex items-center gap-1 px-2 py-1 rounded-full border text-xs ${
+      active ? "bg-black text-white border-black" : "bg-gray-50"
+    }`}>
+      <span>{label}</span>
+      <span className="tabular-nums">{value ?? 0}</span>
+    </span>
+  );
 }
-function pagerBtn(disabled: boolean): React.CSSProperties {
-  return {
-    padding: "8px 12px", borderRadius: 8, border: "1px solid #e5e7eb",
-    background: disabled ? "#f3f4f6" : "#fff", color: "#111827", cursor: disabled ? "not-allowed" : "pointer"
-  };
-}
-
