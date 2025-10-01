@@ -63,23 +63,30 @@ const writeAddedCache = (fid: number | null, val = true) => {
 };
 
 /* ===========================
-   Smart hover (fixed below + right-aligned)
+   Smart hover (anchored below handle, right-aligned)
    =========================== */
 
 type TooltipPos = { left: number; top: number };
 
 function useSmartTooltip() {
-  const compute = useCallback((anchor: HTMLElement, tooltipWidth = 300): TooltipPos => {
+  const compute = useCallback((anchor: HTMLElement, tooltipWidth = 320, tooltipHeight = 96): TooltipPos => {
     const r = anchor.getBoundingClientRect();
-    const margin = 12;               // поле от краёв вьюпорта
-    const offsetY = 8;               // насколько ниже ника показывать
-    // стараемся прижать к правому краю, но не выезжать
-    const maxLeft = window.innerWidth - tooltipWidth - margin;
-    // базово ставим левую грань под начало ника
-    const baseLeft = r.left;
-    // а теперь ограничим вправо (к краю), но не позволим уйти левее поля
-    const left = Math.max(margin, Math.min(maxLeft, baseLeft));
-    const top  = Math.min(r.bottom + offsetY, window.innerHeight - 160); // не уезжать за низ
+    const gap = 8;
+    const vw = window.innerWidth;
+    const vh = window.innerHeight;
+
+    // Выставляем сразу ПОД ником
+    let top = r.bottom + gap;
+
+    // Прижимаем к правому краю, но не вылезаем за экран
+    let left = r.right - tooltipWidth; // визуально правее ника
+    left = Math.max(8, Math.min(left, vw - tooltipWidth - 8));
+
+    // Если не помещается по вертикали — поднимаем
+    if (top + tooltipHeight > vh - 8) {
+      top = Math.max(8, vh - tooltipHeight - 8);
+    }
+
     return { left, top };
   }, []);
   return { compute };
@@ -96,24 +103,28 @@ function AuthorHoverWrap({
   const { compute } = useSmartTooltip();
   const [open, setOpen] = useState(false);
   const [pos, setPos] = useState<TooltipPos | null>(null);
-  const hideTimer = useRef<any>(null);
+  const hideTimer = useRef<number | null>(null);
 
   const show = () => {
     const el = anchorRef.current;
     if (!el) return;
-    if (hideTimer.current) clearTimeout(hideTimer.current);
-    setPos(compute(el, 300));
+    if (hideTimer.current) window.clearTimeout(hideTimer.current);
+    setPos(compute(el, 320, 100));
     setOpen(true);
   };
-  const hide = (delay = 0) => {
-    if (hideTimer.current) clearTimeout(hideTimer.current);
-    hideTimer.current = setTimeout(() => setOpen(false), delay);
+  const hide = (delay = 120) => {
+    if (hideTimer.current) window.clearTimeout(hideTimer.current);
+    hideTimer.current = window.setTimeout(() => setOpen(false), delay);
   };
 
   const onClick = (e: React.MouseEvent) => {
     const target = e.target as HTMLElement;
-    if (target.closest("a")) return;
-    setOpen(v => (v ? false : (show(), true)));
+    if (target.closest("a")) return; // не мешаем кликам по ссылке ника
+    if (open) {
+      hide(0);
+    } else {
+      show();
+    }
   };
 
   return (
@@ -125,7 +136,7 @@ function AuthorHoverWrap({
         onMouseLeave={() => hide(120)}
         onClick={onClick}
         onTouchStart={show}
-        onTouchEnd={() => hide(200)}
+        onTouchEnd={() => hide(180)}
       >
         {children}
       </div>
@@ -133,7 +144,7 @@ function AuthorHoverWrap({
       {open && pos && (
         <div
           style={{ left: pos.left, top: pos.top, position: "fixed" }}
-          className="z-50 w-[300px] rounded-2xl border border-zinc-200 bg-white/95 shadow-[0_18px_50px_rgba(0,0,0,0.18)] ring-1 ring-black/5 p-4 pointer-events-none backdrop-blur-sm"
+          className="z-50 w-[320px] rounded-2xl border border-zinc-200 bg-white/95 shadow-xl ring-1 ring-black/5 p-4 pointer-events-none backdrop-blur-sm"
           aria-hidden
         >
           <div className="flex items-center gap-3">
@@ -142,11 +153,11 @@ function AuthorHoverWrap({
               <img
                 src={c.pfp_url}
                 alt=""
-                className="w-14 h-14 rounded-xl object-cover ring-1 ring-zinc-200"
+                className="w-16 h-16 rounded-xl object-cover ring-1 ring-zinc-200"
                 referrerPolicy="no-referrer"
               />
             ) : (
-              <div className="w-14 h-14 rounded-xl bg-zinc-200" />
+              <div className="w-16 h-16 rounded-xl bg-zinc-200" />
             )}
             <div className="min-w-0">
               <div className="font-medium truncate text-zinc-900">
@@ -187,7 +198,6 @@ export default function Page() {
   const [followChecking, setFollowChecking]   = useState<boolean>(false);
 
   const lastCtxRef = useRef<any>(null);
-  const [debugInfo, setDebugInfo] = useState<Record<string, any> | null>(null);
 
   async function load() {
     setLoading(true);
@@ -211,12 +221,6 @@ export default function Page() {
 
     (async () => {
       try {
-        const url =
-          typeof window !== "undefined"
-            ? new URL(window.location.href)
-            : new URL("https://example.com");
-        const wantDebug = url.searchParams.get("debug") === "1";
-
         const inMini = await sdk.isInMiniApp();
         setIsMiniApp(inMini);
 
@@ -224,7 +228,6 @@ export default function Page() {
           setIsAdded(true);
           setViewerFid(null);
           setFollowConfirmed(true);
-          if (wantDebug) setDebugInfo({ inMini, reason: "not in mini app" });
           return;
         }
 
@@ -259,9 +262,7 @@ export default function Page() {
         // fallback к локальному кэшу
         const cachedAdded = readAddedCache(typeof fid === "number" ? fid : null);
         if (added === undefined || added === false) {
-          if (cachedAdded) {
-            added = true;
-          }
+          if (cachedAdded) added = true;
         }
         if (added !== undefined) setIsAdded(!!added);
 
@@ -279,17 +280,6 @@ export default function Page() {
           setFollowConfirmed(true);
         }
 
-        if (wantDebug) {
-          setDebugInfo({
-            inMini,
-            addedInitial: added,
-            cachedAdded,
-            viewerFidInitial: fid ?? null,
-            promoFid: PROMO_FID,
-            promoHandle: PROMO_HANDLE || null,
-          });
-        }
-
         // subscribe + rechecks
         const recheck = async () => {
           try {
@@ -300,14 +290,11 @@ export default function Page() {
             if (typeof f === "number" && f !== viewerFid) {
               setViewerFid(f);
               const addCache = readAddedCache(f);
-              if (a === undefined || a === false) {
-                setIsAdded(addCache);
-              } else {
-                setIsAdded(!!a);
-              }
-              if (f === PROMO_FID) {
-                setFollowConfirmed(true);
-              } else {
+              if (a === undefined || a === false) setIsAdded(addCache);
+              else setIsAdded(!!a);
+
+              if (f === PROMO_FID) setFollowConfirmed(true);
+              else {
                 const fl = typeof window !== "undefined" &&
                   window.localStorage.getItem(followKey(f, PROMO_FID)) === "1";
                 setFollowConfirmed(PROMO_FID ? fl : true);
@@ -418,7 +405,7 @@ export default function Page() {
       {isMiniApp && !isAdded && (
         <div className="fixed inset-0 z-[60] bg-white/80 backdrop-blur-sm">
           <div className="absolute inset-x-0 bottom-0 p-4 pb-[max(env(safe-area-inset-bottom),1rem)]">
-            <div className="mx-auto max-w-xl rounded-2xl border bg-white shadow-xl p-5">
+            <div className="mx-auto max-w-xl rounded-2xl border bg-white shadow-2xl p-5">
               <h2 className="text-lg font-semibold mb-1">Add “Top Casts” to My Apps</h2>
               <p className="text-sm text-zinc-600 mb-4">
                 To continue, please add this mini app to your Warpcast apps.
@@ -438,7 +425,7 @@ export default function Page() {
       {isMiniApp && isAdded && PROMO_FID > 0 && viewerFid !== null && viewerFid !== PROMO_FID && !followConfirmed && (
         <div className="fixed inset-0 z-[50] bg-white/60 backdrop-blur-[2px]">
           <div className="absolute inset-x-0 bottom-0 p-4 pb-[max(env(safe-area-inset-bottom),1rem)]">
-            <div className="mx-auto max-w-xl rounded-2xl border bg-white shadow-xl p-5">
+            <div className="mx-auto max-w-xl rounded-2xl border bg-white shadow-2xl p-5">
               <h2 className="text-lg font-semibold mb-1">
                 Follow {PROMO_HANDLE ? `@${PROMO_HANDLE}` : "our account"}
               </h2>
@@ -498,11 +485,11 @@ export default function Page() {
 
       {/* Skeletons */}
       {loading && items.length === 0 && (
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
           {Array.from({ length: 6 }).map((_, i) => (
             <div
               key={i}
-              className="h-44 rounded-3xl border border-zinc-200 bg-white shadow-[0_12px_36px_rgba(0,0,0,0.08)] p-5 animate-pulse"
+              className="h-44 rounded-3xl border border-zinc-200 bg-white shadow-md p-5 animate-pulse"
             >
               <div className="h-4 w-16 bg-zinc-200 rounded mb-3" />
               <div className="h-4 w-3/4 bg-zinc-200 rounded mb-2" />
@@ -515,14 +502,14 @@ export default function Page() {
 
       {/* grid */}
       {!loading && (
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
           {items.map((c, idx) => (
             <article
               key={c.cast_hash}
               className={`
                 h-full rounded-3xl border border-zinc-200/80 bg-white
-                shadow-[0_14px_44px_rgba(0,0,0,0.10)]
-                transition hover:shadow-[0_20px_60px_rgba(0,0,0,0.14)] will-change-transform
+                shadow-[0_10px_30px_rgba(0,0,0,0.06),0_2px_6px_rgba(0,0,0,0.04)]
+                transition hover:shadow-[0_18px_48px_rgba(0,0,0,0.10),0_4px_10px_rgba(0,0,0,0.06)]
               `}
             >
               <div className="p-5 flex flex-col">
@@ -595,12 +582,6 @@ export default function Page() {
 
       {!loading && items.length === 0 && !error && (
         <div className="text-zinc-500 mt-6">Nothing here yet. Try again later.</div>
-      )}
-
-      {debugInfo && (
-        <pre className="fixed bottom-2 left-2 right-2 max-h-[40vh] overflow-auto bg-black/80 text-green-200 text-[11px] p-2 rounded">
-          {JSON.stringify(debugInfo, null, 2)}
-        </pre>
       )}
     </div>
   );
