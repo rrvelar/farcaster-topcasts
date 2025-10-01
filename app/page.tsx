@@ -3,7 +3,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { sdk } from "@farcaster/miniapp-sdk";
 
-/* -------------------- Types -------------------- */
 type Cast = {
   cast_hash: string;
   fid: number;
@@ -32,8 +31,7 @@ const RANGES = [
   { key: "7d", label: "7 days" },
 ] as const;
 
-/* -------------------- Utils -------------------- */
-// Warpcast URLs
+// URLs
 function makeCastUrl(hash: string, username?: string | null) {
   if (username && username.trim()) return `https://warpcast.com/${username}/${hash}`;
   return `https://warpcast.com/~/cast/${hash}`;
@@ -43,47 +41,48 @@ function makeProfileUrl(fid: number, handle?: string) {
   return `https://warpcast.com/~/profiles/${fid}`;
 }
 
-// Promo account (который юзер должен зафолловить)
+// Promo account
 const PROMO_FID = Number(process.env.NEXT_PUBLIC_PROMO_FID || "0");
 const PROMO_HANDLE = (process.env.NEXT_PUBLIC_PROMO_HANDLE || "").trim();
 
-// Простые ключи для локального кеша
+// ----- localStorage helpers (per viewer fid) -----
 const addedKey = (fid: number | null) => `fc_added_${fid ?? "anon"}`;
 const followKey = (viewer: number, promo: number) => `fc_follow_${viewer}_${promo}`;
 
-const readLS = (k: string) => {
-  if (typeof window === "undefined") return null;
-  try { return window.localStorage.getItem(k); } catch { return null; }
+const readAddedCache = (fid: number | null) => {
+  if (typeof window === "undefined") return false;
+  try {
+    return window.localStorage.getItem(addedKey(fid)) === "1";
+  } catch { return false; }
 };
-const writeLS = (k: string, v: string) => {
+const writeAddedCache = (fid: number | null, val = true) => {
   if (typeof window === "undefined") return;
-  try { window.localStorage.setItem(k, v); } catch {}
+  try {
+    window.localStorage.setItem(addedKey(fid), val ? "1" : "0");
+  } catch {}
 };
 
-/* -------------------- Page -------------------- */
 export default function Page() {
   // filters
-  const [metric, setMetric] =
-    useState<(typeof METRICS)[number]["key"]>("replies");
-  const [range, setRange] =
-    useState<(typeof RANGES)[number]["key"]>("24h");
+  const [metric, setMetric] = useState<(typeof METRICS)[number]["key"]>("replies");
+  const [range, setRange]   = useState<(typeof RANGES)[number]["key"]>("24h");
 
   // data
   const [loading, setLoading] = useState(false);
-  const [items, setItems] = useState<Cast[]>([]);
-  const [error, setError] = useState<string | null>(null);
+  const [items, setItems]     = useState<Cast[]>([]);
+  const [error, setError]     = useState<string | null>(null);
 
   // mini app state
-  const [isMiniApp, setIsMiniApp] = useState(false);
-  const [viewerFid, setViewerFid] = useState<number | null>(null);
+  const [isMiniApp, setIsMiniApp]   = useState(false);
+  const [isAdded, setIsAdded]       = useState<boolean>(true); // web => true
+  const [viewerFid, setViewerFid]   = useState<number | null>(null);
 
-  // gates
-  const [isAdded, setIsAdded] = useState<boolean>(false); // <— по умолчанию false, чтобы кнопка точно показалась в мини-аппе
+  // follow gate
   const [followConfirmed, setFollowConfirmed] = useState<boolean>(false);
-  const [followChecking, setFollowChecking] = useState<boolean>(false);
-  const [followTries, setFollowTries] = useState<number>(0);
+  const [followChecking, setFollowChecking]   = useState<boolean>(false);
 
   const lastCtxRef = useRef<any>(null);
+  const [debugInfo, setDebugInfo] = useState<Record<string, any> | null>(null);
 
   async function load() {
     setLoading(true);
@@ -100,106 +99,161 @@ export default function Page() {
     }
   }
 
-  // Инициализация Mini App + вычисление added/viewerFid c жёсткими фаллбэками
+  // Init & context
   useEffect(() => {
+    let cancelled = false;
     let timers: Array<ReturnType<typeof setTimeout>> = [];
     let off: undefined | (() => void);
-    let cancelled = false;
 
     (async () => {
       try {
+        const url =
+          typeof window !== "undefined"
+            ? new URL(window.location.href)
+            : new URL("https://example.com");
+        const wantDebug = url.searchParams.get("debug") === "1";
+
         const inMini = await sdk.isInMiniApp();
         if (cancelled) return;
         setIsMiniApp(inMini);
 
         if (!inMini) {
-          // В обычном вебе ничего не блокируем
-          setViewerFid(null);
           setIsAdded(true);
+          setViewerFid(null);
           setFollowConfirmed(true);
+          if (wantDebug) setDebugInfo({ inMini, reason: "not in mini app" });
           return;
         }
 
         await sdk.actions.ready();
+
+        const compute = (ctx: any) => {
+          const added =
+            ctx?.client?.added ??
+            ctx?.miniApp?.added ??
+            (Array.isArray(ctx?.client?.apps)
+              ? ctx.client.apps.some((a: any) => a?.id && a?.added)
+              : undefined);
+          const fid =
+            ctx?.viewer?.fid ??
+            ctx?.user?.fid ??
+            ctx?.client?.viewer?.fid ??
+            null;
+          return { added: typeof added === "boolean" ? added : undefined, fid };
+        };
 
         const getCtx = async () =>
           typeof (sdk as any).getContext === "function"
             ? await (sdk as any).getContext()
             : (sdk as any).context;
 
-        const compute = (ctx: any) => {
-          const addedRaw =
-            ctx?.client?.added ??
-            ctx?.miniApp?.added ??
-            (Array.isArray(ctx?.client?.apps)
-              ? ctx.client.apps.some((a: any) => a?.id && a?.added)
-              : undefined);
-          const fidRaw =
-            ctx?.viewer?.fid ??
-            ctx?.user?.fid ??
-            ctx?.client?.viewer?.fid ??
-            null;
-          return {
-            added: typeof addedRaw === "boolean" ? addedRaw : undefined,
-            fid: typeof fidRaw === "number" ? fidRaw : null,
-          };
-        };
-
-        // первичный контекст
-        const ctx = await getCtx();
+        // initial context
+        let ctx = await getCtx();
         lastCtxRef.current = ctx;
-        const { added, fid } = compute(ctx);
-        setViewerFid(fid);
+        let { added, fid } = compute(ctx);
+        setViewerFid(typeof fid === "number" ? fid : null);
 
-        // added: сначала контекст, если он «undefined» — пробуем кеш локалстореджа
-        let addedVal = added;
-        const addedCache = readLS(addedKey(fid));
-        if (addedVal === undefined && addedCache === "1") addedVal = true;
-        setIsAdded(!!addedVal);
+        // Fallback to cache if added is undefined/false but cache says true
+        const cachedAdded = readAddedCache(typeof fid === "number" ? fid : null);
+        if (added === undefined || added === false) {
+          if (cachedAdded) {
+            added = true;
+          }
+        }
+        if (added !== undefined) setIsAdded(!!added);
 
-        // follow: если сам на себя — сразу ок, иначе читаем кеш
-        if (!PROMO_FID || fid === null || fid === PROMO_FID) {
-          setFollowConfirmed(true);
+        // follow cache
+        if (typeof fid === "number") {
+          if (fid === PROMO_FID) {
+            setFollowConfirmed(true);
+          } else {
+            const cachedFollow =
+              typeof window !== "undefined" &&
+              window.localStorage.getItem(followKey(fid, PROMO_FID)) === "1";
+            setFollowConfirmed(PROMO_FID ? cachedFollow : true);
+          }
         } else {
-          const fCache = readLS(followKey(fid, PROMO_FID)) === "1";
-          setFollowConfirmed(fCache);
+          setFollowConfirmed(true);
         }
 
-        // слушатель обновления контекста
-        const onCtx = async () => {
+        if (wantDebug) {
+          setDebugInfo({
+            inMini,
+            addedInitial: added,
+            cachedAdded,
+            viewerFidInitial: fid ?? null,
+            promoFid: PROMO_FID,
+            promoHandle: PROMO_HANDLE || null,
+          });
+        }
+
+        // subscribe and schedule rechecks (контекст иногда запаздывает)
+        const recheck = async () => {
           try {
             const c = await getCtx();
             lastCtxRef.current = c;
             const { added: a, fid: f } = compute(c);
 
-            if (f !== null) setViewerFid(f);
-            if (a === true) {
-              setIsAdded(true);
-              writeLS(addedKey(f), "1");
+            if (typeof f === "number" && f !== viewerFid) {
+              setViewerFid(f);
+              // при смене аккаунта — читаем его кэш
+              const addCache = readAddedCache(f);
+              if (a === undefined || a === false) {
+                setIsAdded(addCache);
+              } else {
+                setIsAdded(!!a);
+              }
+              if (f === PROMO_FID) {
+                setFollowConfirmed(true);
+              } else {
+                const fl = typeof window !== "undefined" &&
+                  window.localStorage.getItem(followKey(f, PROMO_FID)) === "1";
+                setFollowConfirmed(PROMO_FID ? fl : true);
+              }
+            } else {
+              const addCache = readAddedCache(viewerFid);
+              if (a === undefined || a === false) {
+                if (addCache) setIsAdded(true);
+              } else {
+                setIsAdded(!!a);
+              }
+            }
+
+            if (wantDebug) {
+              setDebugInfo((d) => ({
+                ...(d || {}),
+                recheck: Date.now(),
+                addedReported: a,
+                cachedAddedNow: readAddedCache(viewerFid),
+                viewerFidNow: f ?? viewerFid,
+              }));
             }
           } catch {}
         };
 
-        off = (sdk as any)?.events?.on?.("context", onCtx);
-        [600, 1500, 3000].forEach((ms) => timers.push(setTimeout(onCtx, ms)));
-      } catch {
-        // если SDK грохнулся — ведём себя как обычное веб-приложение
+        off = (sdk as any)?.events?.on?.("context", recheck);
+        [600, 1500, 3000].forEach((ms) => {
+          const t = setTimeout(recheck, ms);
+          timers.push(t);
+        });
+      } catch (e) {
         setIsMiniApp(false);
-        setViewerFid(null);
         setIsAdded(true);
+        setViewerFid(null);
         setFollowConfirmed(true);
       }
     })();
 
     return () => {
-      cancelled = true;
       timers.forEach(clearTimeout);
       if (typeof off === "function") off();
     };
   }, []);
 
-  // подгрузка данных
-  useEffect(() => { load(); /* eslint-disable-next-line */ }, [metric, range]);
+  useEffect(() => {
+    load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [metric, range]);
 
   const title = useMemo(() => {
     const m = METRICS.find((m) => m.key === metric)?.label ?? "";
@@ -207,27 +261,28 @@ export default function Page() {
     return `Top casts · ${m.toLowerCase()} · ${r}`;
   }, [metric, range]);
 
-  // Добавление приложения
+  // actions
   const handleAddMiniApp = async () => {
     try {
       await sdk.actions.addMiniApp();
-      writeLS(addedKey(viewerFid), "1");
+      // сразу ставим кэш, чтобы гейт не мигал при ре-открытии
+      writeAddedCache(viewerFid, true);
       setIsAdded(true);
 
-      // лёгкая повторная проверка через секунду
+      // и пытаемся подтвердить контекстом через секунду
       setTimeout(async () => {
         try {
           const ctx =
             typeof (sdk as any).getContext === "function"
               ? await (sdk as any).getContext()
               : (sdk as any).context;
-          const addedRaw =
+          const added =
             ctx?.client?.added ??
             ctx?.miniApp?.added ??
             (Array.isArray(ctx?.client?.apps)
               ? ctx.client.apps.some((a: any) => a?.id && a?.added)
               : undefined);
-          if (addedRaw === true) setIsAdded(true);
+          if (added === true) setIsAdded(true);
         } catch {}
       }, 1200);
     } catch (e) {
@@ -235,81 +290,33 @@ export default function Page() {
     }
   };
 
-  // Бэкенд-проверка подписки (Neynar)
-  const verifyFollowOnce = async (): Promise<boolean> => {
-    if (!viewerFid || !PROMO_FID) return false;
-    try {
-      const r = await fetch(
-        `/api/follow/verify?viewer=${viewerFid}&target=${PROMO_FID}`,
-        { cache: "no-store" }
-      );
-      if (!r.ok) return false;
-      const j = await r.json();
-      return !!j?.following;
-    } catch {
-      return false;
-    }
-  };
-
-  // открыть URL через SDK / или в новой вкладке
   const openUrl = async (url: string) => {
     try {
-      if ((sdk as any)?.actions?.openURL) await (sdk as any).actions.openURL(url);
-      else window.open(url, "_blank", "noopener,noreferrer");
+      if ((sdk as any)?.actions?.openURL) {
+        await (sdk as any).actions.openURL(url);
+      } else {
+        window.open(url, "_blank", "noopener,noreferrer");
+      }
     } catch {
       window.open(url, "_blank", "noopener,noreferrer");
     }
   };
 
-  // Кнопка Follow: открываем профиль и ждём реальной подписки (poll + visibility)
   const handleFollow = async () => {
     if (!PROMO_FID) return;
-
-    // 1) открываем профиль
-    await openUrl(makeProfileUrl(PROMO_FID, PROMO_HANDLE));
-
-    // 2) включаем ожидание и пуллинг
     setFollowChecking(true);
-    setFollowTries(0);
-
-    let stop = false;
-    const onVisible = async () => {
-      if (document.visibilityState === "visible" && !stop) {
-        const pass = await verifyFollowOnce();
-        if (pass) {
-          stop = true;
-          document.removeEventListener("visibilitychange", onVisible);
-          if (viewerFid) writeLS(followKey(viewerFid, PROMO_FID), "1");
-          setFollowConfirmed(true);
-          setFollowChecking(false);
-        }
+    try {
+      await openUrl(makeProfileUrl(PROMO_FID, PROMO_HANDLE));
+      if (viewerFid && typeof window !== "undefined") {
+        window.localStorage.setItem(followKey(viewerFid, PROMO_FID), "1");
       }
-    };
-    document.addEventListener("visibilitychange", onVisible);
-
-    const MAX_TRIES = 10;      // ~20 сек суммарно
-    const INTERVAL  = 2000;
-
-    for (let i = 0; i < MAX_TRIES && !stop; i++) {
-      await new Promise((res) => setTimeout(res, INTERVAL));
-      setFollowTries(i + 1);
-      const pass = await verifyFollowOnce();
-      if (pass) {
-        stop = true;
-        document.removeEventListener("visibilitychange", onVisible);
-        if (viewerFid) writeLS(followKey(viewerFid, PROMO_FID), "1");
-        setFollowConfirmed(true);
-        break;
-      }
-    }
-
-    if (!stop) {
-      // не удалось подтвердить — оставляем гейт включённым
+      setFollowConfirmed(true);
+    } finally {
       setFollowChecking(false);
     }
   };
 
-  /* -------------------- UI -------------------- */
+  // UI
   return (
     <div className="mx-auto max-w-6xl px-4 py-6 pb-28">
       {/* Gate #1: Add app */}
@@ -332,7 +339,7 @@ export default function Page() {
         </div>
       )}
 
-      {/* Gate #2: Follow */}
+      {/* Gate #2: Follow (disabled for the owner’s own account) */}
       {isMiniApp && isAdded && PROMO_FID > 0 && viewerFid !== null && viewerFid !== PROMO_FID && !followConfirmed && (
         <div className="fixed inset-0 z-[50] bg-white/60 backdrop-blur-[2px]">
           <div className="absolute inset-x-0 bottom-0 p-4 pb-[max(env(safe-area-inset-bottom),1rem)]">
@@ -343,17 +350,18 @@ export default function Page() {
               <p className="text-sm text-gray-600 mb-4">
                 Please follow to access the app.
               </p>
-
               <button
                 onClick={handleFollow}
-                disabled={!viewerFid || followChecking}
-                className={`w-full px-4 py-2 rounded-xl text-sm transition ${
-                  !viewerFid || followChecking ? "bg-gray-200 text-gray-700 cursor-not-allowed"
-                                               : "bg-black text-white hover:bg-gray-900"
-                }`}
+                disabled={followChecking || !viewerFid}
                 title={!viewerFid ? "Open inside Warpcast to continue" : undefined}
+                className={`w-full px-4 py-2 rounded-xl text-sm transition
+                  ${followChecking || !viewerFid
+                    ? "bg-gray-200 text-gray-700 cursor-not-allowed"
+                    : "bg-black text-white hover:bg-gray-900"}`}
               >
-                {followChecking ? `Checking… (${followTries})` : `Follow in Warpcast`}
+                {followChecking
+                  ? "Waiting for follow…"
+                  : `Follow ${PROMO_HANDLE ? `@${PROMO_HANDLE}` : "in Warpcast"}`}
               </button>
             </div>
           </div>
@@ -391,7 +399,9 @@ export default function Page() {
         ))}
       </div>
 
-      <div className="text-sm text-gray-500 mb-4">{title}</div>
+      <div className="text-sm text-gray-500 mb-4">
+        {`Top casts · ${METRICS.find(m => m.key === metric)?.label.toLowerCase()} · ${RANGES.find(r => r.key === range)?.label}`}
+      </div>
 
       {error && <div className="text-red-600 mb-4">Error: {error}</div>}
       {loading && <div className="mb-4">Loading…</div>}
@@ -409,7 +419,13 @@ export default function Page() {
                 ) : (
                   <div className="w-6 h-6 rounded-full bg-gray-200" />
                 )}
-                <a className="text-sm font-medium hover:underline truncate" href={`https://warpcast.com/~/profiles/${c.fid}`} target="_blank" rel="noopener noreferrer" title={`fid:${c.fid}`}>
+                <a
+                  className="text-sm font-medium hover:underline truncate"
+                  href={`https://warpcast.com/~/profiles/${c.fid}`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  title={`fid:${c.fid}`}
+                >
                   {c.display_name || (c.username ? `@${c.username}` : `fid:${c.fid}`)}
                 </a>
                 {c.channel ? (
@@ -447,15 +463,23 @@ export default function Page() {
       {!loading && items.length === 0 && !error && (
         <div className="text-gray-500 mt-6">Nothing here yet. Try again later.</div>
       )}
+
+      {debugInfo && (
+        <pre className="fixed bottom-2 left-2 right-2 max-h-[40vh] overflow-auto bg-black/80 text-green-200 text-[11px] p-2 rounded">
+          {JSON.stringify(debugInfo, null, 2)}
+        </pre>
+      )}
     </div>
   );
 }
 
 function Badge({ label, value, active }: { label: string; value: number; active?: boolean }) {
   return (
-    <span className={`inline-flex items-center gap-1 px-2 py-1 rounded-full border text-xs ${
-      active ? "bg-black text-white border-black" : "bg-gray-50"
-    }`}>
+    <span
+      className={`inline-flex items-center gap-1 px-2 py-1 rounded-full border text-xs ${
+        active ? "bg-black text-white border-black" : "bg-gray-50"
+      }`}
+    >
       <span>{label}</span>
       <span className="tabular-nums">{value ?? 0}</span>
     </span>
