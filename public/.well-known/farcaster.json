@@ -2,13 +2,13 @@
   "miniapp": {
     "version": "1",
     "name": "Top Casts",
-    "homeUrl": "https://farcaster-topcasts.vercel.app/",
+    "homeUrl": "https://farcaster-topcasts.vercel.app",
     "iconUrl": "https://farcaster-topcasts.vercel.app/icon-512.png",
     "splashImageUrl": "https://farcaster-topcasts.vercel.app/splash-1024.png",
     "splashBackgroundColor": "#FFFFFF",
 
     "subtitle": "Daily ranking of casts",
-    "description": "See the best Farcaster casts at a glance. We track replies, likes and recasts, aggregate the last 24 hours and rank posts by engagement.",
+    "description": "See the best Farcaster casts at a glance. We track replies, likes and recasts",
     "primaryCategory": "social",
 
     "screenshotUrls": [
@@ -16,9 +16,9 @@
     ],
     "heroImageUrl": "https://farcaster-topcasts.vercel.app/hero.png",
     "tags": ["farcaster", "social", "rating", "cast"],
-    "tagline": "Top Farcaster posts in one app",
+    "tagline": "Top Farcaster posts",
 
-    "ogTitle": "Top Casts — Farcaster",
+    "ogTitle": "Top Casts Farcaster",
     "ogDescription": "Best Farcaster casts of the last 24 hours by replies, likes and recasts.",
     "ogImageUrl": "https://farcaster-topcasts.vercel.app/og.png",
 
