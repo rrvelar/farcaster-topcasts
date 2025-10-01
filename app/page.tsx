@@ -30,6 +30,15 @@ const RANGES = [
   { key: "7d", label: "7 дней" },
 ] as const;
 
+// Правильный конструктор ссылки на каст (Warpcast)
+function makeCastUrl(hash: string, username?: string | null) {
+  if (username && username.trim()) {
+    return `https://warpcast.com/${username}/${hash}`;
+  }
+  // ВАЖНО: fallback — /~/cast/, НЕ /~/casts/
+  return `https://warpcast.com/~/cast/${hash}`;
+}
+
 export default function Page() {
   const [metric, setMetric] =
     useState<(typeof METRICS)[number]["key"]>("replies");
@@ -127,7 +136,8 @@ export default function Page() {
                 <a
                   className="text-sm font-medium hover:underline"
                   href={`https://warpcast.com/~/profiles/${c.fid}`}
-                  target="_blank" rel="noreferrer"
+                  target="_blank"
+                  rel="noopener noreferrer"
                   title={`fid:${c.fid}`}
                 >
                   {c.display_name || c.username || `fid:${c.fid}`}
@@ -160,9 +170,9 @@ export default function Page() {
             <footer className="flex items-center justify-between">
               <a
                 className="text-blue-600 hover:underline text-sm"
-                href={`https://warpcast.com/~/casts/${c.cast_hash}`}
+                href={makeCastUrl(c.cast_hash, c.username)}
                 target="_blank"
-                rel="noreferrer"
+                rel="noopener noreferrer"
               >
                 Открыть ↗
               </a>
