@@ -3,35 +3,34 @@ import { headers } from "next/headers";
 import { sql } from "../../_db";
 
 /**
- * ENG-ONLY за окно (по умолчанию 24ч), с приоритетом «жирных» постов.
- * - Поиск: q="after:ISO" + sort_type=algorithmic
- * - Берём ENG_PAGES страниц (по умолчанию 5) — экономно по CU
- * - Детали по /casts, upsert с greatest(...)
+ * «Только жирные за окно (по умолчанию 24ч)»
+ * - Поиск: q="*" + since=ISO, sort_type=algorithmic (фоллбек на desc_chron)
+ * - Берём ENG_PAGES страниц (по умолчанию 5)
+ * - Детали через /casts, upsert c greatest(...)
  */
 
 const API = "https://api.neynar.com/v2/farcaster";
 const KEY = process.env.NEYNAR_API_KEY!;
 const MANUAL_TOKEN = process.env.INGEST_TOKEN || "";
 
-// --- режим «только жирные» (включён по умолчанию)
+// режим «eng-only» включён по умолчанию
 const ENG_ONLY = (process.env.ENG_ONLY || "1") === "1";
-// --- сколько страниц «тяжёлой» выборки снять
+// сколько страниц «тяжёлой» выборки снять
 const ENG_PAGES = Number(process.env.ENG_PAGES || 5);
 
-// --- лимиты/тайминги Neynar (щадящие)
-const RPM = Number(process.env.RPM || 45);             // запросов/мин (держим ниже 60 на Starter)
+// лимиты/тайминги Neynar (щадя Starter)
+const RPM = Number(process.env.RPM || 45);             // запросов/мин (держим < 60)
 const SLEEP_MS = Number(process.env.SLEEP_MS || 1800);  // пауза между запросами
 const BULK_BATCH = 100;                                 // батч /casts
 const MAX_SEARCH_REQ = Number(process.env.MAX_SEARCH_REQ || 60);
 const MAX_BULK_REQ = Number(process.env.MAX_BULK_REQ || 30);
 
-// --- анти-частота запусков (для кронов)
+// анти-частота запусков
 const MIN_INTERVAL_MIN = Number(process.env.MIN_INTERVAL_MIN || 10);
 
 // ------- утилиты -------
 function sleep(ms: number) { return new Promise(r => setTimeout(r, ms)); }
 function toISOFloorMinutes(d: Date) {
-  // без «секунд», чтобы одинаково парсилось Neynar'ом
   const x = new Date(d);
   x.setUTCSeconds(0, 0);
   return x.toISOString();
@@ -85,14 +84,15 @@ async function fetchRL(input: RequestInfo | URL, init?: RequestInit, retries = 2
   return r;
 }
 
-// ---- одна страница cast/search (q включает after:ISO) ----
-async function searchAlgorithmic(q: string, cursor?: string) {
+// ---- одна страница cast/search (q="*", since=ISO, sort_type=...) ----
+async function searchPageSince(sinceISO: string, cursor?: string, sort: "algorithmic" | "desc_chron" = "algorithmic") {
   if (REQ_SEARCH >= MAX_SEARCH_REQ) return { casts: [], cursor: undefined, aborted: "budget" as const };
 
   const u = new URL(`${API}/cast/search`);
-  u.searchParams.set("q", q);
+  u.searchParams.set("q", "*");            // максимально широкий запрос
   u.searchParams.set("limit", "100");
-  u.searchParams.set("sort_type", "algorithmic"); // по доке: engagement + time
+  u.searchParams.set("sort_type", sort);   // algorithmic приоритетно, дальше фоллбек
+  u.searchParams.set("since", sinceISO);
   if (cursor) u.searchParams.set("cursor", cursor);
 
   const r = await fetchRL(u, { headers: { "x-api-key": KEY, accept: "application/json" } });
@@ -136,21 +136,20 @@ async function fetchBulkCasts(hashes: string[]) {
   return out;
 }
 
-// ---- основной режим: ENG-ONLY (algorithmic, after:ISO) ----
+// ---- основной режим: ENG-ONLY (algorithmic c фоллбеком) ----
 async function runEngagementOnly(hours: number) {
   const sinceISO = toISOFloorMinutes(new Date(Date.now() - hours * 60 * 60 * 1000));
-  const q = `after:${sinceISO}`; // официальный оператор времени внутри q (см. доку)
 
   const collected: any[] = [];
   let cursor: string | undefined = undefined;
   let pages = 0;
 
+  // 1) пробуем algorithmic
   do {
-    const page = await searchAlgorithmic(q, cursor);
+    const page = await searchPageSince(sinceISO, cursor, "algorithmic");
     if ((page as any).aborted === "budget" || (page as any).error) break;
 
     if (page.casts?.length) {
-      // дополнительная отсечка по времени на всякий случай
       const inWindow = page.casts.filter((c: any) => {
         const ts = new Date(c.timestamp).getTime();
         return ts >= new Date(sinceISO).getTime() && ts <= Date.now();
@@ -164,7 +163,30 @@ async function runEngagementOnly(hours: number) {
     await sleep(SLEEP_MS);
   } while (true);
 
-  return { sinceISO, items: collected, pages };
+  // 2) если собрали мало/пусто — один прогон фоллбеком desc_chron (чуть дешевле)
+  if (collected.length === 0 && REQ_SEARCH < MAX_SEARCH_REQ) {
+    cursor = undefined;
+    pages = 0;
+    do {
+      const page = await searchPageSince(sinceISO, cursor, "desc_chron");
+      if ((page as any).aborted === "budget" || (page as any).error) break;
+
+      if (page.casts?.length) {
+        const inWindow = page.casts.filter((c: any) => {
+          const ts = new Date(c.timestamp).getTime();
+          return ts >= new Date(sinceISO).getTime() && ts <= Date.now();
+        });
+        if (inWindow.length) collected.push(...inWindow);
+      }
+
+      cursor = page.cursor;
+      pages += 1;
+      if (pages >= Math.max(1, Math.floor(ENG_PAGES / 2)) || !cursor) break;
+      await sleep(SLEEP_MS);
+    } while (true);
+  }
+
+  return { sinceISO, items: collected };
 }
 
 export const revalidate = 0;
@@ -178,7 +200,6 @@ export async function GET(req: Request) {
     const token = url.searchParams.get("token");
     const force = url.searchParams.get("force") === "1";
     const mode = (url.searchParams.get("mode") || "").toLowerCase(); // "eng" — принудительно
-
     const hours = Math.max(1, Math.min(168, Number(url.searchParams.get("hours") || "24"))); // окно часов
 
     if (!isCron && token !== MANUAL_TOKEN) {
@@ -200,14 +221,13 @@ export async function GET(req: Request) {
       return NextResponse.json({ error: "ENG_ONLY disabled. Pass ?mode=eng or set ENG_ONLY=1." }, { status: 400 });
     }
 
-    const { sinceISO, items, pages } = await runEngagementOnly(hours);
+    const { sinceISO, items } = await runEngagementOnly(hours);
 
     if (!items.length) {
       return NextResponse.json({
         upserted: 0,
         note: "no_engagement_casts",
         since: sinceISO,
-        pagesFetched: pages,
         reqSearch: REQ_SEARCH,
         reqBulk: REQ_BULK
       });
@@ -262,20 +282,19 @@ export async function GET(req: Request) {
       );
     }
 
-    // last_ts обновим приблизительно — на самый свежий из вставленных
+    const st2 = await getState();
     const maxTs = rows.reduce<string | null>((acc, r: any) => {
       const t = r.timestamp ? new Date(r.timestamp).toISOString() : null;
       if (!t) return acc;
       if (!acc || new Date(t) > new Date(acc)) return t;
       return acc;
-    }, st?.last_ts ?? null);
-    await upsertState({ last_ts: maxTs || st?.last_ts || new Date().toISOString() });
+    }, st2?.last_ts ?? null);
+    await upsertState({ last_ts: maxTs || st2?.last_ts || new Date().toISOString() });
 
     return NextResponse.json({
       upserted: rows.length,
       scanned: uniq.length,
       since: sinceISO,
-      pagesFetched: pages,
       reqSearch: REQ_SEARCH,
       reqBulk: REQ_BULK
     });
