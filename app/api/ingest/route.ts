@@ -6,11 +6,18 @@ const API = "https://api.neynar.com/v2/farcaster";
 const KEY = process.env.NEYNAR_API_KEY!;
 const MANUAL_TOKEN = process.env.INGEST_TOKEN || "";
 
+// какие языки собирать (через запятую). Пример: "en,ru,es"
+const TOP_LANGS = (process.env.TOP_LANGS || "en,ru")
+  .split(",")
+  .map((s) => s.trim())
+  .filter(Boolean);
+
 // --- эконом-режим Neynar ---
-const PAGE_LIMIT = 3;          // макс. страниц /cast/search за запуск (~300 кастов)
-const SLEEP_MS = 2000;         // пауза между вызовами (2s)
-const BULK_BATCH = 100;        // размер батча для /casts
-const MIN_INTERVAL_MIN = 15;   // пропуск, если прошлый запуск был < 15 мин назад
+const PAGE_LIMIT = 3;                 // макс. страниц /cast/search за запуск (~300 кастов)
+const SLEEP_MS = 2000;                // пауза между вызовами (2s)
+const BULK_BATCH = 100;               // размер батча для /casts
+const MIN_INTERVAL_MIN = 15;          // пропуск, если прошлый запуск был < 15 мин назад
+const BACKFILL_PAGE_LIMIT = 10;       // глубина при hours>0
 
 function sleep(ms: number) { return new Promise(r => setTimeout(r, ms)); }
 function isoMinus(minutes: number) {
@@ -34,12 +41,15 @@ async function upsertState(fields: { last_ts?: string; updated_at?: string }) {
 }
 
 // ---- CAST SEARCH (без счётчиков) ----
-// Пробуем сначала with `since`, если пусто — повторяем с `after`
+// Сначала пробуем with `since`, если пусто — повторяем с `after`
 async function searchCasts(sinceISO: string, cursor?: string) {
   const makeUrl = (timeKey: "since" | "after") => {
     const u = new URL(`${API}/cast/search`);
-    u.searchParams.set("q", "*");      // максимально широкий поиск; при желании сузим
+    const langQuery =
+      TOP_LANGS.length > 0 ? TOP_LANGS.map((l) => `lang:${l}`).join(" OR ") : "*";
+    u.searchParams.set("q", langQuery);        // фильтр по языкам
     u.searchParams.set("limit", "100");
+    u.searchParams.set("sort_type", "latest"); // новейшие вперёд
     u.searchParams.set(timeKey, sinceISO);
     if (cursor) u.searchParams.set("cursor", cursor);
     return u;
@@ -135,7 +145,10 @@ export async function GET(req: Request) {
     let cursor: string | undefined;
     const found: any[] = [];
     let pages = 0;
-    const maxPages = pageLimitOverride > 0 ? Math.min(pageLimitOverride, 15) : PAGE_LIMIT;
+    const maxPages =
+      pageLimitOverride > 0
+        ? Math.min(pageLimitOverride, 15)
+        : (hours > 0 ? BACKFILL_PAGE_LIMIT : PAGE_LIMIT);
 
     do {
       const page = await searchCasts(since, cursor);
