@@ -238,6 +238,54 @@ export async function GET(req: Request) {
 
     // детали и счётчики
     const withCounts = await fetchBulkCasts(uniq);
+    // --- NEW: апсертим авторов в таблицу users (без доп. запросов к Neynar) ---
+try {
+  const authorsRaw = withCounts
+    .map((c: any) => c?.author)
+    .filter((a: any) => a && typeof a.fid === "number");
+
+  if (authorsRaw.length) {
+    // дедуп по fid
+    const map = new Map<number, any>();
+    for (const a of authorsRaw) {
+      if (!map.has(a.fid)) {
+        map.set(a.fid, {
+          fid: a.fid,
+          username: a.username ?? null,
+          display_name: a.display_name ?? null,
+          pfp_url: a.pfp?.url ?? null,
+        });
+      }
+    }
+    const authors = Array.from(map.values());
+
+    const values = authors
+      .map((_, i) => `($${i * 4 + 1}, $${i * 4 + 2}, $${i * 4 + 3}, $${i * 4 + 4})`)
+      .join(",");
+    const params = authors.flatMap((u: any) => [
+      u.fid,
+      u.username,
+      u.display_name,
+      u.pfp_url,
+    ]);
+
+    await sql.unsafe(
+      `
+      insert into users (fid, username, display_name, pfp_url)
+      values ${values}
+      on conflict (fid) do update set
+        username = coalesce(excluded.username, users.username),
+        display_name = coalesce(excluded.display_name, users.display_name),
+        pfp_url = coalesce(excluded.pfp_url, users.pfp_url),
+        updated_at = now()
+      `,
+      params
+    );
+  }
+} catch (e) {
+  console.warn("users upsert skipped:", e);
+}
+
 
     // upsert
     const byHash = new Map(withCounts.map((c: any) => [c.hash, c]));
