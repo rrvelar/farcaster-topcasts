@@ -22,7 +22,7 @@
     "ogDescription": "Best Farcaster casts of the last 24 hours by replies, likes and recasts.",
     "ogImageUrl": "https://farcaster-topcasts.vercel.app/og.png",
 
-    "castShareUrl": "https://warpcast.com/~/compose?text=Check+out+Top+Casts"
+    "castShareUrl": "ttps://farcaster-topcasts.vercel.app/"
   },
   "accountAssociation": {
     "header": "eyJmaWQiOjIzMzgwLCJ0eXBlIjoiY3VzdG9keSIsImtleSI6IjB4YjZhNDY3MDRiNmU5MERkNmNlZTZDQmI5RjQ5Q2MyMzVFNzlhOTZlMiJ9",
