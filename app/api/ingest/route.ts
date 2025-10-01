@@ -41,43 +41,42 @@ async function upsertState(fields: { last_ts?: string; updated_at?: string }) {
 }
 
 // ---- CAST SEARCH (без счётчиков) ----
-// Сначала пробуем with `since`, если пусто — повторяем с `after`
-async function searchCasts(sinceISO: string, cursor?: string) {
-  const makeUrl = (timeKey: "since" | "after") => {
-    const u = new URL(`${API}/cast/search`);
-    const langQuery =
-      TOP_LANGS.length > 0 ? TOP_LANGS.map((l) => `lang:${l}`).join(" OR ") : "*";
-    u.searchParams.set("q", langQuery);        // фильтр по языкам
-    u.searchParams.set("limit", "100");
-    u.searchParams.set("sort_type", "desc_chron"); // новейшие вперёд
-    u.searchParams.set(timeKey, sinceISO);
-    if (cursor) u.searchParams.set("cursor", cursor);
-    return u;
-  };
+// Пробуем (1) q по языкам + since, (2) языки + after, (3) q="*" + since, (4) q="*" + after
+async function searchCastsSmart(sinceISO: string, cursor: string | undefined, qOverride?: string) {
+  const qLang = TOP_LANGS.length > 0 ? TOP_LANGS.map((l) => `lang:${l}`).join(" OR ") : "*";
+  const queries = [qOverride?.trim() || qLang, "*"].filter((v, i, a) => v && a.indexOf(v) === i);
+  const timeKeys: Array<"since" | "after"> = ["since", "after"];
 
-  // попытка №1: since
-  let r = await fetch(makeUrl("since"), { headers: { "x-api-key": KEY, accept: "application/json" } });
-  if (!r.ok) throw new Error(`Neynar cast/search (since) ${r.status}: ${await r.text()}`);
-  let data = await r.json();
-  let result = data?.result ?? data;
-  let casts = Array.isArray(result?.casts) ? result.casts :
-              Array.isArray(result?.messages) ? result.messages : [];
-  let nextCursor = result?.next?.cursor ?? result?.cursor ?? undefined;
+  for (const q of queries) {
+    for (const timeKey of timeKeys) {
+      const u = new URL(`${API}/cast/search`);
+      u.searchParams.set("q", q);
+      u.searchParams.set("limit", "100");
+      u.searchParams.set("sort_type", "desc_chron"); // допустимые: desc_chron | chron | algorithmic
+      u.searchParams.set(timeKey, sinceISO);
+      if (cursor) u.searchParams.set("cursor", cursor);
 
-  if (casts.length > 0 || cursor) {
-    return { casts, cursor: nextCursor } as { casts: any[]; cursor?: string };
+      const r = await fetch(u, { headers: { "x-api-key": KEY, accept: "application/json" } });
+      if (!r.ok) {
+        const txt = await r.text();
+        throw new Error(`Neynar cast/search (${timeKey}, q=${q}) ${r.status}: ${txt}`);
+      }
+      const data = await r.json();
+      const result = data?.result ?? data;
+      const casts = Array.isArray(result?.casts) ? result.casts :
+                    Array.isArray(result?.messages) ? result.messages : [];
+      const nextCursor = result?.next?.cursor ?? result?.cursor ?? undefined;
+      if (casts.length > 0 || cursor) {
+        return { casts, cursor: nextCursor, qUsed: q, timeKeyUsed: timeKey };
+      }
+      // если пусто и это был первый заход (без cursor), попробуем следующий вариант
+      if (cursor) {
+        // если мы на последующих страницах и пусто — возвращаем пусто, чтобы остановиться
+        return { casts, cursor: nextCursor, qUsed: q, timeKeyUsed: timeKey };
+      }
+    }
   }
-
-  // попытка №2: after
-  r = await fetch(makeUrl("after"), { headers: { "x-api-key": KEY, accept: "application/json" } });
-  if (!r.ok) throw new Error(`Neynar cast/search (after) ${r.status}: ${await r.text()}`);
-  data = await r.json();
-  result = data?.result ?? data;
-  casts = Array.isArray(result?.casts) ? result.casts :
-          Array.isArray(result?.messages) ? result.messages : [];
-  nextCursor = result?.next?.cursor ?? result?.cursor ?? undefined;
-
-  return { casts, cursor: nextCursor } as { casts: any[]; cursor?: string };
+  return { casts: [] as any[], cursor: undefined as string | undefined, qUsed: queries[0], timeKeyUsed: "since" as const };
 }
 
 // ---- BULK CASTS (со счётчиками) ----
@@ -100,7 +99,7 @@ async function fetchBulkCasts(hashes: string[]) {
 
     if (i + BULK_BATCH < hashes.length) await sleep(SLEEP_MS);
   }
-  return out; // у каждого: reactions.likes_count / recasts_count / replies.count
+  return out;
 }
 
 export const revalidate = 0;
@@ -114,10 +113,11 @@ export async function GET(req: Request) {
     const token = url.searchParams.get("token");
     const force = url.searchParams.get("force") === "1";
 
-    // доп. параметры для бэкфилла
+    // доп. параметры для бэкфилла/отладки
     const hours = Math.max(0, Math.min(168, Number(url.searchParams.get("hours") || "0"))); // 0 => инкремент
     const includeExisting = url.searchParams.get("includeExisting") === "1"; // обновлять даже уже существующие хэши
     const pageLimitOverride = Number(url.searchParams.get("pages") || "0");
+    const qOverride = url.searchParams.get("q") || undefined; // ручной q для теста
 
     if (!isCron && token !== MANUAL_TOKEN) {
       return NextResponse.json({ error: "forbidden" }, { status: 403 });
@@ -150,8 +150,13 @@ export async function GET(req: Request) {
         ? Math.min(pageLimitOverride, 15)
         : (hours > 0 ? BACKFILL_PAGE_LIMIT : PAGE_LIMIT);
 
+    let qUsed: string | undefined;
+    let timeKeyUsed: "since" | "after" | undefined;
+
     do {
-      const page = await searchCasts(since, cursor);
+      const page = await searchCastsSmart(since, cursor, qOverride);
+      if (!qUsed && page.qUsed) qUsed = page.qUsed;
+      if (!timeKeyUsed && page.timeKeyUsed) timeKeyUsed = page.timeKeyUsed;
       if (page.casts?.length) found.push(...page.casts);
       cursor = page.cursor;
       pages += 1;
@@ -160,7 +165,7 @@ export async function GET(req: Request) {
     } while (true);
 
     if (found.length === 0) {
-      return NextResponse.json({ upserted: 0, pagesFetched: pages, note: "no casts", since });
+      return NextResponse.json({ upserted: 0, pagesFetched: pages, note: "no casts", since, qUsed: qUsed || (TOP_LANGS.join(",")) });
     }
 
     // 2) уникальные хэши; по умолчанию пропускаем те, что уже в БД
@@ -177,14 +182,14 @@ export async function GET(req: Request) {
       toFetch = uniq.filter((h) => !existSet.has(h));
 
       if (toFetch.length === 0) {
-        return NextResponse.json({ upserted: 0, pagesFetched: pages, requestedBulk: 0, skippedExisting: uniq.length, since });
+        return NextResponse.json({ upserted: 0, pagesFetched: pages, requestedBulk: 0, skippedExisting: uniq.length, since, qUsed, timeKeyUsed });
       }
     }
 
     // 3) берём полные данные по новым хэшам (включая счётчики)
     const withCounts = await fetchBulkCasts(toFetch);
 
-    // 4) готовим строки для upsert (ВАЖНО: без score — он generated)
+    // 4) upsert (ВАЖНО: без score — он generated)
     const byHash = new Map(withCounts.map((c: any) => [c.hash, c]));
     const rows = toFetch.map((hash) => {
       const c = byHash.get(hash) || {};
@@ -242,7 +247,9 @@ export async function GET(req: Request) {
       scanned: found.length,
       requestedBulk: toFetch.length,
       skippedExisting: uniq.length - toFetch.length,
-      since
+      since,
+      qUsed,
+      timeKeyUsed
     });
   } catch (e: any) {
     console.error("INGEST ERROR:", e?.message || e);
