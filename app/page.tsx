@@ -77,7 +77,6 @@ function useSmartTooltip() {
     const fitsRight = preferredLeft + tooltipWidth <= window.innerWidth - 8;
     const left = fitsRight ? preferredLeft : Math.max(8, fallbackLeft);
     const midY = r.top + r.height / 2;
-    // высота карточки ~140–160px, смещаем от середины
     const top = Math.max(8, Math.min(midY - 72, window.innerHeight - 168));
     return { left, top, side: fitsRight ? "right" : "left" };
   }, []);
@@ -112,7 +111,7 @@ function AuthorHoverWrap({
         className="flex items-center gap-2 min-w-0"
         onMouseEnter={show}
         onMouseLeave={hide}
-        onClick={toggleTap} // на мобилке — по тапу
+        onClick={toggleTap}
       >
         {children}
       </div>
@@ -120,7 +119,7 @@ function AuthorHoverWrap({
       {open && pos && (
         <div
           style={{ left: pos.left, top: pos.top, position: "fixed" }}
-          className="z-50 w-[300px] rounded-2xl border bg-white shadow-xl p-4 pointer-events-none"
+          className="z-50 w-[300px] rounded-2xl border border-zinc-200 bg-white/95 shadow-lg ring-1 ring-black/5 p-4 pointer-events-none backdrop-blur-sm"
         >
           <div className="flex items-center gap-3">
             {c.pfp_url ? (
@@ -142,7 +141,6 @@ function AuthorHoverWrap({
               )}
             </div>
           </div>
-          {/* Никаких ссылок внутри ховера — убрано по твоей просьбе */}
         </div>
       )}
     </>
@@ -154,8 +152,8 @@ function AuthorHoverWrap({
    =========================== */
 
 export default function Page() {
-  // filters
-  const [metric, setMetric] = useState<(typeof METRICS)[number]["key"]>("replies");
+  // filters — по умолчанию запускаем By likes
+  const [metric, setMetric] = useState<(typeof METRICS)[number]["key"]>("likes");
   const [range, setRange]   = useState<(typeof RANGES)[number]["key"]>("24h");
 
   // data
@@ -276,7 +274,7 @@ export default function Page() {
           });
         }
 
-        // subscribe + rechecks (контекст иногда запаздывает)
+        // subscribe + rechecks
         const recheck = async () => {
           try {
             const c = await getCtx();
@@ -393,7 +391,13 @@ export default function Page() {
 
   // UI
   return (
-    <div className="mx-auto max-w-6xl px-4 py-6 pb-28 bg-zinc-50">
+    <div
+      className={`
+        mx-auto max-w-6xl px-4 py-6 pb-28
+        bg-zinc-50
+        bg-[radial-gradient(1200px_500px_at_50%_-200px,rgba(0,0,0,0.05),transparent)]
+      `}
+    >
       {/* Gate #1: Add app */}
       {isMiniApp && !isAdded && (
         <div className="fixed inset-0 z-[60] bg-white/80 backdrop-blur-sm">
@@ -414,7 +418,7 @@ export default function Page() {
         </div>
       )}
 
-      {/* Gate #2: Follow (disabled for the owner’s own account) */}
+      {/* Gate #2: Follow */}
       {isMiniApp && isAdded && PROMO_FID > 0 && viewerFid !== null && viewerFid !== PROMO_FID && !followConfirmed && (
         <div className="fixed inset-0 z-[50] bg-white/60 backdrop-blur-[2px]">
           <div className="absolute inset-x-0 bottom-0 p-4 pb-[max(env(safe-area-inset-bottom),1rem)]">
@@ -443,7 +447,7 @@ export default function Page() {
         </div>
       )}
 
-      <h1 className="text-3xl font-semibold tracking-tight mb-4 text-zinc-900">Top casts</h1>
+      <h1 className="text-4xl font-semibold tracking-tight mb-4 text-zinc-900">Top casts</h1>
 
       {/* filters */}
       <div className="flex gap-2 mb-3 flex-wrap">
@@ -480,7 +484,10 @@ export default function Page() {
       {loading && items.length === 0 && (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
           {Array.from({ length: 6 }).map((_, i) => (
-            <div key={i} className="h-44 rounded-2xl border bg-white shadow-[0_1px_0_#e5e7eb] md:shadow-sm p-4 animate-pulse">
+            <div
+              key={i}
+              className="h-44 rounded-2xl border border-zinc-200 bg-white shadow-sm md:shadow-md p-4 animate-pulse"
+            >
               <div className="h-4 w-16 bg-zinc-200 rounded mb-3" />
               <div className="h-4 w-3/4 bg-zinc-200 rounded mb-2" />
               <div className="h-4 w-2/3 bg-zinc-200 rounded mb-6" />
@@ -494,67 +501,76 @@ export default function Page() {
       {!loading && (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
           {items.map((c, idx) => (
-            <article key={c.cast_hash} className="h-full rounded-2xl border bg-white shadow-[0_1px_0_#e5e7eb] md:shadow-sm p-4 flex flex-col">
-              <header className="mb-3 flex items-center justify-between">
-                <div className="text-xs text-zinc-500">#{idx + 1}</div>
+            <article
+              key={c.cast_hash}
+              className={`
+                h-full rounded-2xl border border-zinc-200/80 bg-white
+                shadow-sm md:shadow-[0_10px_30px_rgba(0,0,0,0.06)]
+                transition hover:shadow-[0_14px_40px_rgba(0,0,0,0.08)] will-change-transform
+              `}
+            >
+              <div className="p-4 flex flex-col">
+                <header className="mb-3 flex items-center justify-between">
+                  <div className="text-xs text-zinc-500">#{idx + 1}</div>
 
-                {/* Ховер-обёртка вокруг текущего контента (сохранил ссылку на профиль в заголовке) */}
-                <AuthorHoverWrap c={c}>
-                  {c.pfp_url ? (
-                    // eslint-disable-next-line @next/next/no-img-element
-                    <img
-                      src={c.pfp_url}
-                      alt=""
-                      className="w-6 h-6 rounded-full object-cover ring-1 ring-zinc-200"
-                      referrerPolicy="no-referrer"
-                    />
+                  {/* Ховер-обёртка (ссылка на профиль остаётся в заголовке) */}
+                  <AuthorHoverWrap c={c}>
+                    {c.pfp_url ? (
+                      // eslint-disable-next-line @next/next/no-img-element
+                      <img
+                        src={c.pfp_url}
+                        alt=""
+                        className="w-6 h-6 rounded-full object-cover ring-1 ring-zinc-200"
+                        referrerPolicy="no-referrer"
+                      />
+                    ) : (
+                      <div className="w-6 h-6 rounded-full bg-zinc-200" />
+                    )}
+                    <a
+                      className="text-sm font-medium hover:underline truncate"
+                      href={`https://warpcast.com/~/profiles/${c.fid}`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      title={`fid:${c.fid}`}
+                    >
+                      {c.display_name || (c.username ? `@${c.username}` : `fid:${c.fid}`)}
+                    </a>
+                  </AuthorHoverWrap>
+
+                  {c.channel ? (
+                    <span className="ml-1 shrink-0 text-xs text-zinc-600 bg-zinc-100 px-2 py-0.5 rounded-full">#{c.channel}</span>
                   ) : (
-                    <div className="w-6 h-6 rounded-full bg-zinc-200" />
+                    <span className="ml-1 shrink-0 text-xs text-zinc-400">no channel</span>
                   )}
+                </header>
+
+                <p className="whitespace-pre-wrap text-sm leading-6 line-clamp-5 text-zinc-900">
+                  {c.text}
+                </p>
+
+                <div className="mt-3 text-xs text-zinc-600">
+                  <time title={new Date(c.timestamp).toLocaleString()}>
+                    {new Date(c.timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+                  </time>
+                </div>
+
+                <div className="mt-auto" />
+
+                <div className="pt-3 flex items-center justify-between">
+                  <div className="flex items-center gap-3 text-sm">
+                    <Badge label="💬" value={c.replies} active={metric === "replies"} />
+                    <Badge label="❤️" value={c.likes} active={metric === "likes"} />
+                    <Badge label="🔁" value={c.recasts} active={metric === "recasts"} />
+                  </div>
                   <a
-                    className="text-sm font-medium hover:underline truncate"
-                    href={`https://warpcast.com/~/profiles/${c.fid}`}
+                    className="text-blue-600 hover:underline text-sm shrink-0"
+                    href={makeCastUrl(c.cast_hash, c.username)}
                     target="_blank"
                     rel="noopener noreferrer"
-                    title={`fid:${c.fid}`}
                   >
-                    {c.display_name || (c.username ? `@${c.username}` : `fid:${c.fid}`)}
+                    Open ↗
                   </a>
-                </AuthorHoverWrap>
-
-                {c.channel ? (
-                  <span className="ml-1 shrink-0 text-xs text-zinc-600 bg-zinc-100 px-2 py-0.5 rounded-full">#{c.channel}</span>
-                ) : (
-                  <span className="ml-1 shrink-0 text-xs text-zinc-400">no channel</span>
-                )}
-              </header>
-
-              <p className="whitespace-pre-wrap text-sm leading-6 line-clamp-5 text-zinc-900">
-                {c.text}
-              </p>
-
-              <div className="mt-3 text-xs text-zinc-600">
-                <time title={new Date(c.timestamp).toLocaleString()}>
-                  {new Date(c.timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
-                </time>
-              </div>
-
-              <div className="mt-auto" />
-
-              <div className="pt-3 flex items-center justify-between">
-                <div className="flex items-center gap-3 text-sm">
-                  <Badge label="💬" value={c.replies} active={metric === "replies"} />
-                  <Badge label="❤️" value={c.likes} active={metric === "likes"} />
-                  <Badge label="🔁" value={c.recasts} active={metric === "recasts"} />
                 </div>
-                <a
-                  className="text-blue-600 hover:underline text-sm shrink-0"
-                  href={makeCastUrl(c.cast_hash, c.username)}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                >
-                  Open ↗
-                </a>
               </div>
             </article>
           ))}
