@@ -161,14 +161,14 @@ export async function GET(req: Request) {
     // 3) берём полные данные по новым хэшам (включая счётчики)
     const withCounts = await fetchBulkCasts(onlyNew);
 
-    // 4) готовим upsert
+    // 4) готовим upsert (ВАЖНО: без столбца score — он generated)
     const byHash = new Map(withCounts.map((c: any) => [c.hash, c]));
     const rows = onlyNew.map((hash) => {
       const c = byHash.get(hash) || {};
       const likes = c?.reactions?.likes_count ?? 0;
       const recasts = c?.reactions?.recasts_count ?? 0;
       const replies = c?.replies?.count ?? 0;
-      const score = replies * 10 + recasts * 3 + likes;
+      const score = replies * 10 + recasts * 3 + likes; // только для логики, не вставляем
       return {
         cast_hash: hash,
         fid: c?.author?.fid ?? null,
@@ -180,16 +180,18 @@ export async function GET(req: Request) {
     }).filter(r => r.fid !== null);
 
     if (rows.length) {
+      // 8 колонок без score
       const values = rows.map((_, i) =>
-        `($${i*9+1}, $${i*9+2}, $${i*9+3}, $${i*9+4}, $${i*9+5}, $${i*9+6}, $${i*9+7}, $${i*9+8}, $${i*9+9})`
+        `($${i*8+1}, $${i*8+2}, $${i*8+3}, $${i*8+4}, $${i*8+5}, $${i*8+6}, $${i*8+7}, $${i*8+8})`
       ).join(",");
       const params = rows.flatMap(r => [
-        r.cast_hash, r.fid, r.text, r.channel, r.timestamp, r.likes, r.recasts, r.replies, r.score
+        r.cast_hash, r.fid, r.text, r.channel, r.timestamp, r.likes, r.recasts, r.replies
       ]);
+
       await sql.unsafe(
         `
         insert into top_casts
-        (cast_hash, fid, text, channel, timestamp, likes, recasts, replies, score)
+        (cast_hash, fid, text, channel, timestamp, likes, recasts, replies)
         values ${values}
         on conflict (cast_hash) do update set
           fid = excluded.fid,
@@ -198,8 +200,7 @@ export async function GET(req: Request) {
           timestamp = excluded.timestamp,
           likes = excluded.likes,
           recasts = excluded.recasts,
-          replies = excluded.replies,
-          score = excluded.score
+          replies = excluded.replies
         `,
         params
       );
