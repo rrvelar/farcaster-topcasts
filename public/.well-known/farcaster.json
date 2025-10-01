@@ -4,7 +4,8 @@
     "name": "Top Casts",
     "homeUrl": "https://farcaster-topcasts.vercel.app/",
     "iconUrl": "https://farcaster-topcasts.vercel.app/icon-512.png",
-    "splashImageUrl": "https://farcaster-topcasts.vercel.app/splash-1024.png",
+    "imageUrl": "https://fitness-diary-web.vercel.app/preview.png",
+    "splashImageUrl": "https://farcaster-topcasts.vercel.app/splash.png",
     "splashBackgroundColor": "#FFFFFF",
 
     "subtitle": "Daily ranking of casts",
