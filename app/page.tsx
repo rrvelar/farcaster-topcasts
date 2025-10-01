@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { sdk } from "@farcaster/miniapp-sdk";
 
 type Cast = {
@@ -52,6 +52,8 @@ export default function Page() {
   // mini app state
   const [isMiniApp, setIsMiniApp] = useState(false);
   const [isAdded, setIsAdded] = useState<boolean>(true); // assume added on web
+  const lastCtxRef = useRef<any>(null);
+  const [debugInfo, setDebugInfo] = useState<Record<string, any> | null>(null);
 
   async function load() {
     setLoading(true);
@@ -69,28 +71,127 @@ export default function Page() {
     }
   }
 
-  // Init Mini App SDK and check whether the app is added
+  // Init Mini App SDK and robust “added” detection
   useEffect(() => {
-    (async () => {
+    let cancelled = false;
+
+    const init = async () => {
       try {
+        const url =
+          typeof window !== "undefined"
+            ? new URL(window.location.href)
+            : new URL("https://example.com");
+        const forcePanel = url.searchParams.get("debugAdd") === "1";
+        const wantDebug = url.searchParams.get("debug") === "1";
+
         const inMini = await sdk.isInMiniApp();
+        if (cancelled) return;
         setIsMiniApp(inMini);
 
-        if (inMini) {
-          // hide splash in host
-          await sdk.actions.ready();
-          const ctx = (sdk as any).context;
-          const added = !!ctx?.client?.added;
-          setIsAdded(added);
-        } else {
-          setIsAdded(true); // normal web
+        if (!inMini) {
+          // In plain web we hide the panel (unless forced).
+          setIsAdded(!forcePanel);
+          if (wantDebug) setDebugInfo({ inMini, reason: "not in mini app" });
+          return;
         }
-      } catch {
-        // SDK not available or not in mini app
+
+        // Tell host we are ready (hide splash)
+        await sdk.actions.ready();
+
+        // Helper to compute "added" across possible context shapes
+        const computeAdded = (ctx: any) => {
+          if (!ctx) return undefined;
+          const v =
+            ctx?.client?.added ??
+            ctx?.miniApp?.added ??
+            (Array.isArray(ctx?.client?.apps)
+              ? ctx.client.apps.some((a: any) => a?.id && a?.added)
+              : undefined);
+          return typeof v === "boolean" ? v : undefined;
+        };
+
+        // First shot at context
+        let ctx: any;
+        if (typeof (sdk as any).getContext === "function") {
+          ctx = await (sdk as any).getContext();
+        } else {
+          ctx = (sdk as any).context;
+        }
+        lastCtxRef.current = ctx;
+
+        let added = computeAdded(ctx);
+        if (forcePanel) added = false;
+        if (added === undefined) {
+          // If unknown yet — show the panel tentatively; we'll correct on update.
+          setIsAdded(false);
+        } else {
+          setIsAdded(!!added);
+        }
+
+        if (wantDebug) {
+          setDebugInfo({
+            inMini,
+            initialAdded: added,
+            initialCtx: ctx,
+          });
+        }
+
+        // Update handler to catch late context updates
+        const onContextUpdate = async () => {
+          try {
+            const c =
+              typeof (sdk as any).getContext === "function"
+                ? await (sdk as any).getContext()
+                : (sdk as any).context;
+            lastCtxRef.current = c;
+            const a = computeAdded(c);
+            if (a !== undefined) setIsAdded(!!a);
+            if (wantDebug) {
+              setDebugInfo((d) => ({
+                ...(d || {}),
+                updatedAdded: a,
+                updatedCtx: c,
+              }));
+            }
+          } catch {}
+        };
+
+        // Subscribe if SDK exposes events
+        const off = (sdk as any)?.events?.on?.("context", onContextUpdate);
+
+        // Also poll a few times as a safety net
+        const timers: any[] = [];
+        [500, 1200, 2500].forEach((ms) => {
+          const t = setTimeout(onContextUpdate, ms);
+          timers.push(t);
+        });
+
+        // cleanup
+        return () => {
+          timers.forEach(clearTimeout);
+          if (typeof off === "function") off();
+        };
+      } catch (e) {
+        // Fall back to plain web
         setIsMiniApp(false);
         setIsAdded(true);
+        const wantDebug =
+          typeof window !== "undefined" &&
+          new URL(window.location.href).searchParams.get("debug") === "1";
+        if (wantDebug) setDebugInfo({ error: String(e) });
       }
-    })();
+    };
+
+    const cleanup = init();
+
+    return () => {
+      cancelled = true;
+      if (typeof cleanup === "function") {
+        try {
+          cleanup();
+        } catch {}
+      }
+    };
   }, []);
 
   useEffect(() => {
@@ -255,6 +356,13 @@ export default function Page() {
             </div>
           </div>
         </div>
+      )}
+
+      {/* Optional: debug overlay (?debug=1) */}
+      {debugInfo && (
+        <pre className="fixed bottom-2 left-2 right-2 max-h-[40vh] overflow-auto bg-black/80 text-green-200 text-[11px] p-2 rounded">
+          {JSON.stringify(debugInfo, null, 2)}
+        </pre>
       )}
     </div>
   );
