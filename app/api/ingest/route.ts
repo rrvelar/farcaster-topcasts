@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { sql } from "@/app/_db";
+import { sql } from "../../_db";
 
 const API = "https://api.neynar.com/v2/farcaster";
 const KEY = process.env.NEYNAR_API_KEY!;
