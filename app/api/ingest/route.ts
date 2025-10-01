@@ -6,11 +6,11 @@ const API = "https://api.neynar.com/v2/farcaster";
 const KEY = process.env.NEYNAR_API_KEY!;
 const MANUAL_TOKEN = process.env.INGEST_TOKEN || "";
 
-// --- анти-расход Neynar ---
+// --- эконом-режим Neynar ---
 const PAGE_LIMIT = 3;          // макс. страниц /cast/search за запуск (~300 кастов)
-const SLEEP_MS = 2000;         // пауза между запросами/батчами
+const SLEEP_MS = 2000;         // пауза между вызовами (2s)
 const BULK_BATCH = 100;        // размер батча для /casts
-const MIN_INTERVAL_MIN = 15;   // пропуск, если предыдущий запуск был < 15 мин назад
+const MIN_INTERVAL_MIN = 15;   // пропуск, если прошлый запуск был < 15 мин назад
 
 function sleep(ms: number) { return new Promise(r => setTimeout(r, ms)); }
 function isoMinus(minutes: number) {
@@ -38,7 +38,7 @@ async function upsertState(fields: { last_ts?: string; updated_at?: string }) {
 async function searchCasts(sinceISO: string, cursor?: string) {
   const makeUrl = (timeKey: "since" | "after") => {
     const u = new URL(`${API}/cast/search`);
-    u.searchParams.set("q", "*");      // максимально широкий поиск
+    u.searchParams.set("q", "*");      // максимально широкий поиск; при желании сузим
     u.searchParams.set("limit", "100");
     u.searchParams.set(timeKey, sinceISO);
     if (cursor) u.searchParams.set("cursor", cursor);
@@ -97,19 +97,24 @@ export const revalidate = 0;
 
 export async function GET(req: Request) {
   try {
-    // защита от публичного вызова: только крон Vercel или ручной с токеном
+    // защита: только крон Vercel или ручной запуск с токеном
     const h = headers();
     const isCron = h.get("x-vercel-cron") === "1";
     const url = new URL(req.url);
     const token = url.searchParams.get("token");
     const force = url.searchParams.get("force") === "1";
+
+    // доп. параметры для бэкфилла
+    const hours = Math.max(0, Math.min(168, Number(url.searchParams.get("hours") || "0"))); // 0 => инкремент
+    const includeExisting = url.searchParams.get("includeExisting") === "1"; // обновлять даже уже существующие хэши
+    const pageLimitOverride = Number(url.searchParams.get("pages") || "0");
+
     if (!isCron && token !== MANUAL_TOKEN) {
       return NextResponse.json({ error: "forbidden" }, { status: 403 });
     }
-
     if (!KEY) return NextResponse.json({ error: "NEYNAR_API_KEY missing" }, { status: 500 });
 
-    // cкипаем частые запуски (если не force)
+    // анти-спам по частоте
     const st = await getState();
     if (!force && st?.updated_at) {
       const diffMin = (Date.now() - new Date(st.updated_at).getTime()) / 60000;
@@ -119,68 +124,71 @@ export async function GET(req: Request) {
     }
     await upsertState({ updated_at: new Date().toISOString() });
 
-    // окно: после last_ts (с 5-мин. буфером), иначе 24ч
-    const since = st?.last_ts
-      ? new Date(new Date(st.last_ts).getTime() - 5 * 60 * 1000).toISOString()
-      : isoMinus(24 * 60);
+    // окно времени
+    const since = hours
+      ? isoMinus(hours * 60)
+      : (st?.last_ts
+          ? new Date(new Date(st.last_ts).getTime() - 5 * 60 * 1000).toISOString()
+          : isoMinus(24 * 60));
 
     // 1) поиск страниц без счётчиков
     let cursor: string | undefined;
     const found: any[] = [];
     let pages = 0;
+    const maxPages = pageLimitOverride > 0 ? Math.min(pageLimitOverride, 15) : PAGE_LIMIT;
+
     do {
       const page = await searchCasts(since, cursor);
       if (page.casts?.length) found.push(...page.casts);
       cursor = page.cursor;
       pages += 1;
-      if (pages >= PAGE_LIMIT || !cursor) break;
+      if (pages >= maxPages || !cursor) break;
       await sleep(SLEEP_MS);
     } while (true);
 
     if (found.length === 0) {
-      return NextResponse.json({ upserted: 0, pagesFetched: pages, note: "no new casts" });
+      return NextResponse.json({ upserted: 0, pagesFetched: pages, note: "no casts", since });
     }
 
-    // 2) только новые хэши (те, которых ещё нет в БД)
+    // 2) уникальные хэши; по умолчанию пропускаем те, что уже в БД
     const uniq = Array.from(new Set(found.map((c: any) => c.hash)));
-    if (uniq.length === 0) {
-      return NextResponse.json({ upserted: 0, pagesFetched: pages, requestedBulk: 0, skippedExisting: 0 });
-    }
+    let toFetch = uniq;
 
-    const placeholders = uniq.map((_, i) => `$${i + 1}`).join(",");
-    const existing = await sql.unsafe(
-      `select cast_hash from top_casts where cast_hash in (${placeholders})`,
-      uniq
-    );
-    const existingSet = new Set(existing.map((r: any) => r.cast_hash));
-    const onlyNew = uniq.filter((h) => !existingSet.has(h));
-    if (onlyNew.length === 0) {
-      return NextResponse.json({ upserted: 0, pagesFetched: pages, requestedBulk: 0, skippedExisting: uniq.length });
+    if (!includeExisting) {
+      const placeholders = uniq.map((_, i) => `$${i + 1}`).join(",");
+      const existing = await sql.unsafe(
+        `select cast_hash from top_casts where cast_hash in (${placeholders})`,
+        uniq
+      );
+      const existSet = new Set(existing.map((r: any) => r.cast_hash));
+      toFetch = uniq.filter((h) => !existSet.has(h));
+
+      if (toFetch.length === 0) {
+        return NextResponse.json({ upserted: 0, pagesFetched: pages, requestedBulk: 0, skippedExisting: uniq.length, since });
+      }
     }
 
     // 3) берём полные данные по новым хэшам (включая счётчики)
-    const withCounts = await fetchBulkCasts(onlyNew);
+    const withCounts = await fetchBulkCasts(toFetch);
 
-    // 4) готовим upsert (ВАЖНО: без столбца score — он generated)
+    // 4) готовим строки для upsert (ВАЖНО: без score — он generated)
     const byHash = new Map(withCounts.map((c: any) => [c.hash, c]));
-    const rows = onlyNew.map((hash) => {
+    const rows = toFetch.map((hash) => {
       const c = byHash.get(hash) || {};
       const likes = c?.reactions?.likes_count ?? 0;
       const recasts = c?.reactions?.recasts_count ?? 0;
       const replies = c?.replies?.count ?? 0;
-      const score = replies * 10 + recasts * 3 + likes; // только для логики, не вставляем
       return {
         cast_hash: hash,
         fid: c?.author?.fid ?? null,
         text: c?.text ?? "",
         channel: c?.channel?.id ?? null,
         timestamp: c?.timestamp ?? new Date().toISOString(),
-        likes, recasts, replies, score
+        likes, recasts, replies
       };
     }).filter(r => r.fid !== null);
 
     if (rows.length) {
-      // 8 колонок без score
       const values = rows.map((_, i) =>
         `($${i*8+1}, $${i*8+2}, $${i*8+3}, $${i*8+4}, $${i*8+5}, $${i*8+6}, $${i*8+7}, $${i*8+8})`
       ).join(",");
@@ -198,15 +206,15 @@ export async function GET(req: Request) {
           text = excluded.text,
           channel = excluded.channel,
           timestamp = excluded.timestamp,
-          likes = excluded.likes,
-          recasts = excluded.recasts,
-          replies = excluded.replies
+          likes = greatest(excluded.likes, top_casts.likes),
+          recasts = greatest(excluded.recasts, top_casts.recasts),
+          replies = greatest(excluded.replies, top_casts.replies)
         `,
         params
       );
     }
 
-    // 5) обновляем маркер
+    // 5) обновим маркер времени
     const maxTs = rows.reduce<string | null>((acc, r: any) => {
       const t = r.timestamp ? new Date(r.timestamp).toISOString() : null;
       if (!t) return acc;
@@ -219,8 +227,9 @@ export async function GET(req: Request) {
       upserted: rows.length,
       pagesFetched: pages,
       scanned: found.length,
-      requestedBulk: onlyNew.length,
-      skippedExisting: uniq.length - onlyNew.length
+      requestedBulk: toFetch.length,
+      skippedExisting: uniq.length - toFetch.length,
+      since
     });
   } catch (e: any) {
     console.error("INGEST ERROR:", e?.message || e);
