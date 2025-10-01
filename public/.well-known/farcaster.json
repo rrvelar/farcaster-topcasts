@@ -2,15 +2,15 @@
   "miniapp": {
     "version": "1",
     "name": "Top Casts",
-    "homeUrl": "https://<твой-домен>.vercel.app",
-    "iconUrl": "https://<твой-домен>.vercel.app/icon-512.png",
-    "splashImageUrl": "https://<твой-домен>.vercel.app/icon-512.png",
+    "homeUrl": "https://farcaster-topcasts.vercel.app",
+    "iconUrl": "https://farcaster-topcasts.vercel.app/icon.png",
+    "splashImageUrl": "https://farcaster-topcasts.vercel.app/icon.png",
     "splashBackgroundColor": "#ffffff",
-    "subtitle": "Лучшие касты суток",
-    "description": "Ранги по реплаям, лайкам и рекастам за 24 часа",
+    "subtitle": "Top Casts",
+    "description": "Raply/Likes/Recasts ranks",
     "primaryCategory": "news-media",
     "ogTitle": "Top Casts · Farcaster",
-    "ogDescription": "Топ-касты за 24 часа",
-    "ogImageUrl": "https://<твой-домен>.vercel.app/og.png"
+    "ogDescription": "Top casts in a Day",
+    "ogImageUrl": "https://farcaster-topcasts.vercel.app/og.png"
   }
 }
