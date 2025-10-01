@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import { sdk } from "@farcaster/miniapp-sdk";
 
 type Cast = {
   cast_hash: string;
@@ -18,32 +19,39 @@ type Cast = {
 };
 
 const METRICS = [
-  { key: "likes", label: "По лайкам" },
-  { key: "replies", label: "По реплаям" },
-  { key: "recasts", label: "По рекастам" },
+  { key: "likes", label: "By likes" },
+  { key: "replies", label: "By replies" },
+  { key: "recasts", label: "By recasts" },
 ] as const;
 
 const RANGES = [
-  { key: "24h", label: "24 часа" },
-  { key: "today", label: "Сегодня" },
-  { key: "yesterday", label: "Вчера" },
-  { key: "7d", label: "7 дней" },
+  { key: "24h", label: "24 hours" },
+  { key: "today", label: "Today" },
+  { key: "yesterday", label: "Yesterday" },
+  { key: "7d", label: "7 days" },
 ] as const;
 
-// правильный URL каста на Warpcast
+// Correct Warpcast cast URL
 function makeCastUrl(hash: string, username?: string | null) {
   if (username && username.trim()) return `https://warpcast.com/${username}/${hash}`;
-  return `https://warpcast.com/~/cast/${hash}`; // важное: /~/cast/, не /~/casts/
+  return `https://warpcast.com/~/cast/${hash}`; // NOTE: /~/cast/, not /~/casts/
 }
 
 export default function Page() {
+  // filters
   const [metric, setMetric] =
     useState<(typeof METRICS)[number]["key"]>("replies");
   const [range, setRange] =
     useState<(typeof RANGES)[number]["key"]>("24h");
+
+  // data
   const [loading, setLoading] = useState(false);
   const [items, setItems] = useState<Cast[]>([]);
   const [error, setError] = useState<string | null>(null);
+
+  // mini app state
+  const [isMiniApp, setIsMiniApp] = useState(false);
+  const [isAdded, setIsAdded] = useState<boolean>(true); // assume added on web
 
   async function load() {
     setLoading(true);
@@ -61,6 +69,30 @@ export default function Page() {
     }
   }
 
+  // Init Mini App SDK and check whether the app is added
+  useEffect(() => {
+    (async () => {
+      try {
+        const inMini = await sdk.isInMiniApp();
+        setIsMiniApp(inMini);
+
+        if (inMini) {
+          // hide splash in host
+          await sdk.actions.ready();
+          const ctx = (sdk as any).context;
+          const added = !!ctx?.client?.added;
+          setIsAdded(added);
+        } else {
+          setIsAdded(true); // normal web
+        }
+      } catch {
+        // SDK not available or not in mini app
+        setIsMiniApp(false);
+        setIsAdded(true);
+      }
+    })();
+  }, []);
+
   useEffect(() => {
     load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -69,16 +101,25 @@ export default function Page() {
   const title = useMemo(() => {
     const m = METRICS.find((m) => m.key === metric)?.label ?? "";
     const r = RANGES.find((r) => r.key === range)?.label ?? "";
-    return `Топ кастов · ${m.toLowerCase()} · ${r}`;
+    return `Top casts · ${m.toLowerCase()} · ${r}`;
   }, [metric, range]);
 
-  return (
-    <div className="mx-auto max-w-6xl px-4 py-6">
-      <h1 className="text-2xl font-semibold mb-4">Топ кастов</h1>
+  const handleAddMiniApp = async () => {
+    try {
+      await sdk.actions.addMiniApp();
+      setIsAdded(true);
+    } catch (e) {
+      console.warn("addMiniApp failed:", e);
+    }
+  };
 
-      {/* диапазон */}
-      <div className="flex gap-2 mb-3">
-        {RANGES.map(r => (
+  return (
+    <div className="mx-auto max-w-6xl px-4 py-6 pb-24">
+      <h1 className="text-2xl font-semibold mb-4">Top casts</h1>
+
+      {/* range */}
+      <div className="flex gap-2 mb-3 flex-wrap">
+        {RANGES.map((r) => (
           <button
             key={r.key}
             onClick={() => setRange(r.key)}
@@ -91,9 +132,9 @@ export default function Page() {
         ))}
       </div>
 
-      {/* метрика */}
-      <div className="flex gap-2 mb-6">
-        {METRICS.map(m => (
+      {/* metric */}
+      <div className="flex gap-2 mb-6 flex-wrap">
+        {METRICS.map((m) => (
           <button
             key={m.key}
             onClick={() => setMetric(m.key)}
@@ -108,22 +149,22 @@ export default function Page() {
 
       <div className="text-sm text-gray-500 mb-4">{title}</div>
 
-      {error && <div className="text-red-600 mb-4">Ошибка: {error}</div>}
-      {loading && <div className="mb-4">Загрузка…</div>}
+      {error && <div className="text-red-600 mb-4">Error: {error}</div>}
+      {loading && <div className="mb-4">Loading…</div>}
 
-      {/* сетка карточек одинаковой высоты */}
+      {/* equal-height cards grid */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
         {items.map((c, idx) => (
           <article
             key={c.cast_hash}
             className="h-full rounded-2xl border bg-white shadow-sm p-4 flex flex-col"
           >
-            {/* верх */}
+            {/* top */}
             <header className="mb-3 flex items-center justify-between">
               <div className="text-xs text-gray-500">#{idx + 1}</div>
 
               <div className="flex items-center gap-2 min-w-0">
-                {/* аватар */}
+                {/* avatar */}
                 {c.pfp_url ? (
                   // eslint-disable-next-line @next/next/no-img-element
                   <img
@@ -136,7 +177,7 @@ export default function Page() {
                   <div className="w-6 h-6 rounded-full bg-gray-200" />
                 )}
 
-                {/* имя/ник */}
+                {/* name/handle */}
                 <a
                   className="text-sm font-medium hover:underline truncate"
                   href={`https://warpcast.com/~/profiles/${c.fid}`}
@@ -147,31 +188,31 @@ export default function Page() {
                   {c.display_name || (c.username ? `@${c.username}` : `fid:${c.fid}`)}
                 </a>
 
-                {/* канал */}
+                {/* channel */}
                 {c.channel ? (
                   <span className="ml-1 shrink-0 text-xs bg-gray-100 px-2 py-0.5 rounded-full">#{c.channel}</span>
                 ) : (
-                  <span className="ml-1 shrink-0 text-xs text-gray-400">без канала</span>
+                  <span className="ml-1 shrink-0 text-xs text-gray-400">no channel</span>
                 )}
               </div>
             </header>
 
-            {/* текст */}
+            {/* text */}
             <p className="whitespace-pre-wrap text-sm leading-5 line-clamp-6 text-gray-900">
               {c.text}
             </p>
 
-            {/* время */}
+            {/* time */}
             <div className="mt-3 text-xs text-gray-600">
               <time title={new Date(c.timestamp).toLocaleString()}>
                 {new Date(c.timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
               </time>
             </div>
 
-            {/* СПЕЙСЕР — всё, что ниже, прижмётся к низу */}
+            {/* spacer to push footer to bottom */}
             <div className="mt-auto" />
 
-            {/* низ: метрики + ссылка, всегда на одной линии */}
+            {/* bottom: stats + link */}
             <div className="pt-3 flex items-center justify-between">
               <div className="flex items-center gap-3 text-sm">
                 <Badge label="💬" value={c.replies} active={metric === "replies"} />
@@ -185,7 +226,7 @@ export default function Page() {
                 target="_blank"
                 rel="noopener noreferrer"
               >
-                Открыть ↗
+                Open ↗
               </a>
             </div>
           </article>
@@ -193,7 +234,27 @@ export default function Page() {
       </div>
 
       {!loading && items.length === 0 && !error && (
-        <div className="text-gray-500 mt-6">Пока пусто. Запусти сбор вручную или зайди позже.</div>
+        <div className="text-gray-500 mt-6">Nothing here yet. Try again later.</div>
+      )}
+
+      {/* Bottom prompt — only in Mini App and when not yet added */}
+      {isMiniApp && !isAdded && (
+        <div className="fixed inset-x-0 bottom-0 z-50">
+          <div className="mx-auto max-w-6xl px-4 pb-[max(env(safe-area-inset-bottom),1rem)] pt-3">
+            <div className="bg-white border shadow-lg rounded-xl p-3 flex items-center justify-between">
+              <div className="text-sm">
+                <div className="font-medium">Add this Mini App</div>
+                <div className="text-gray-500">Save to your Apps for quick access.</div>
+              </div>
+              <button
+                onClick={handleAddMiniApp}
+                className="px-3 py-2 rounded-lg bg-black text-white text-sm"
+              >
+                Add to my apps
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );
