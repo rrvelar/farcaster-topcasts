@@ -2,12 +2,15 @@
   "miniapp": {
     "version": "1",
     "name": "Top Casts",
-    "iconUrl": "https://placehold.co/512x512/png?text=TC",
-    "homeUrl": "https://YOUR_DOMAIN/",
-    "imageUrl": "https://placehold.co/1200x630/png?text=Top+Casts",
-    "buttonTitle": "Открыть",
-    "splashImageUrl": "https://placehold.co/512x512/png?text=TC",
-    "splashBackgroundColor": "#ffffff"
+    "homeUrl": "https://<твой-домен>.vercel.app",
+    "iconUrl": "https://<твой-домен>.vercel.app/icon-512.png",
+    "splashImageUrl": "https://<твой-домен>.vercel.app/icon-512.png",
+    "splashBackgroundColor": "#ffffff",
+    "subtitle": "Лучшие касты суток",
+    "description": "Ранги по реплаям, лайкам и рекастам за 24 часа",
+    "primaryCategory": "news-media",
+    "ogTitle": "Top Casts · Farcaster",
+    "ogDescription": "Топ-касты за 24 часа",
+    "ogImageUrl": "https://<твой-домен>.vercel.app/og.png"
   }
 }
-
