@@ -1,4 +1,3 @@
-// app/page.tsx
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
@@ -13,6 +12,9 @@ type Cast = {
   recasts: number;
   replies: number;
   score: number;
+  username?: string | null;
+  display_name?: string | null;
+  pfp_url?: string | null;
 };
 
 const METRICS = [
@@ -29,8 +31,10 @@ const RANGES = [
 ] as const;
 
 export default function Page() {
-  const [metric, setMetric] = useState<(typeof METRICS)[number]["key"]>("replies");
-  const [range, setRange] = useState<(typeof RANGES)[number]["key"]>("24h");
+  const [metric, setMetric] =
+    useState<(typeof METRICS)[number]["key"]>("replies");
+  const [range, setRange] =
+    useState<(typeof RANGES)[number]["key"]>("24h");
   const [loading, setLoading] = useState(false);
   const [items, setItems] = useState<Cast[]>([]);
   const [error, setError] = useState<string | null>(null);
@@ -66,7 +70,7 @@ export default function Page() {
     <div className="mx-auto max-w-6xl px-4 py-6">
       <h1 className="text-2xl font-semibold mb-4">Топ кастов</h1>
 
-      {/* переключатели диапазона */}
+      {/* диапазон */}
       <div className="flex gap-2 mb-3">
         {RANGES.map(r => (
           <button
@@ -81,7 +85,7 @@ export default function Page() {
         ))}
       </div>
 
-      {/* переключатели метрики */}
+      {/* метрика */}
       <div className="flex gap-2 mb-6">
         {METRICS.map(m => (
           <button
@@ -101,22 +105,40 @@ export default function Page() {
       {error && (
         <div className="text-red-600 mb-4">Ошибка: {error}</div>
       )}
-
       {loading && (
         <div className="mb-4">Загрузка…</div>
       )}
 
-      {/* сетка с карточками: 1 карточка = 1 каст */}
+      {/* сетка: одна плитка = один каст */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
         {items.map((c, idx) => (
           <article key={c.cast_hash} className="border rounded-xl p-4 bg-white shadow-sm">
             <header className="flex items-center justify-between mb-2">
               <div className="text-xs text-gray-500">#{idx + 1}</div>
-              {c.channel ? (
-                <span className="text-xs bg-gray-100 px-2 py-0.5 rounded-full">#{c.channel}</span>
-              ) : (
-                <span className="text-xs text-gray-400">без канала</span>
-              )}
+
+              <div className="flex items-center gap-2">
+                {c.pfp_url ? (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img src={c.pfp_url} alt="" className="w-6 h-6 rounded-full" />
+                ) : (
+                  <div className="w-6 h-6 rounded-full bg-gray-200" />
+                )}
+
+                <a
+                  className="text-sm font-medium hover:underline"
+                  href={`https://warpcast.com/~/profiles/${c.fid}`}
+                  target="_blank" rel="noreferrer"
+                  title={`fid:${c.fid}`}
+                >
+                  {c.display_name || c.username || `fid:${c.fid}`}
+                </a>
+
+                {c.channel ? (
+                  <span className="text-xs bg-gray-100 px-2 py-0.5 rounded-full">#{c.channel}</span>
+                ) : (
+                  <span className="text-xs text-gray-400">без канала</span>
+                )}
+              </div>
             </header>
 
             <p className="whitespace-pre-wrap text-sm leading-5 mb-3 line-clamp-6">
@@ -124,8 +146,6 @@ export default function Page() {
             </p>
 
             <div className="flex items-center gap-3 text-xs text-gray-600 mb-3">
-              <span>fid:{c.fid}</span>
-              <span>·</span>
               <time title={new Date(c.timestamp).toLocaleString()}>
                 {new Date(c.timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
               </time>
@@ -146,21 +166,13 @@ export default function Page() {
               >
                 Открыть ↗
               </a>
-              <a
-                className="text-gray-500 hover:underline text-xs"
-                href={`https://warpcast.com/~/profiles/${c.fid}`}
-                target="_blank"
-                rel="noreferrer"
-              >
-                профиль
-              </a>
             </footer>
           </article>
         ))}
       </div>
 
       {!loading && items.length === 0 && !error && (
-        <div className="text-gray-500 mt-6">Пока пусто. Зайди позже или запусти сбор вручную.</div>
+        <div className="text-gray-500 mt-6">Пока пусто. Запусти сбор вручную или зайди позже.</div>
       )}
     </div>
   );
