@@ -64,6 +64,18 @@ export default function Page() {
   const lastCtxRef = useRef<any>(null);
   const [debugInfo, setDebugInfo] = useState<Record<string, any> | null>(null);
 
+  // NEW: viewer fid из контекста, чтобы проверять follow на сервере
+  const [viewerFid, setViewerFid] = useState<number | null>(null);
+  function pickViewerFid(ctx: any): number | null {
+    return (
+      ctx?.viewer?.fid ??
+      ctx?.client?.viewer?.fid ??
+      ctx?.user?.fid ??
+      ctx?.session?.viewerFid ??
+      null
+    );
+  }
+
   async function load() {
     setLoading(true);
     setError(null);
@@ -127,6 +139,10 @@ export default function Page() {
         }
         lastCtxRef.current = ctx;
 
+        // NEW: берём viewer fid
+        const vf = pickViewerFid(ctx);
+        if (typeof vf === "number" && !Number.isNaN(vf)) setViewerFid(vf);
+
         const added = computeAdded(ctx);
         setIsAdded(added === undefined ? false : !!added);
 
@@ -136,7 +152,8 @@ export default function Page() {
             initialAdded: added,
             initialCtx: ctx,
             promoFid: PROMO_FID,
-            promoHandle: PROMO_HANDLE || null
+            promoHandle: PROMO_HANDLE || null,
+            viewerFid: vf ?? null
           });
         }
 
@@ -149,11 +166,17 @@ export default function Page() {
             lastCtxRef.current = c;
             const a = computeAdded(c);
             if (a !== undefined) setIsAdded(!!a);
+
+            // NEW: обновим viewer fid
+            const vf2 = pickViewerFid(c);
+            if (typeof vf2 === "number" && !Number.isNaN(vf2)) setViewerFid(vf2);
+
             if (wantDebug) {
               setDebugInfo((d) => ({
                 ...(d || {}),
                 updatedAdded: a,
                 updatedCtx: c,
+                viewerFid: vf2 ?? null
               }));
             }
           } catch {}
@@ -202,8 +225,7 @@ export default function Page() {
     }
   };
 
-  // Open profile to follow (we cannot verify follow server-side here without Neynar;
-  // we assume user follows after clicking)
+  // Open profile to follow (cannot auto-follow)
   const openUrl = async (url: string) => {
     try {
       if ((sdk as any)?.actions?.openURL) {
@@ -215,11 +237,45 @@ export default function Page() {
       window.open(url, "_blank", "noopener,noreferrer");
     }
   };
+
+  // NEW: polling Neynar via our server to confirm follow
+  async function pollFollowUntilConfirmed(
+    viewer: number,
+    target: number,
+    { tries = 20, intervalMs = 3000 }: { tries?: number; intervalMs?: number } = {}
+  ) {
+    for (let i = 0; i < tries; i++) {
+      try {
+        const r = await fetch(`/api/follow/check?viewer=${viewer}&target=${target}`, {
+          cache: "no-store",
+        });
+        if (r.ok) {
+          const j = await r.json();
+          if (j?.ok && j?.following === true) {
+            return true;
+          }
+        }
+      } catch {}
+      await new Promise((res) => setTimeout(res, intervalMs));
+    }
+    return false;
+  }
+
+  const [followChecking, setFollowChecking] = useState(false);
   const handleFollow = async () => {
     const url = makeProfileUrl(PROMO_FID, PROMO_HANDLE);
     await openUrl(url);
-    // считаем, что юзер подписался; контент разблокируем
-    setFollowConfirmed(true);
+
+    // Только после подтверждения Neynar разблокируем
+    if (viewerFid && PROMO_FID) {
+      setFollowChecking(true);
+      const ok = await pollFollowUntilConfirmed(viewerFid, PROMO_FID, {
+        tries: 20,        // ~60s
+        intervalMs: 3000,
+      });
+      setFollowChecking(false);
+      if (ok) setFollowConfirmed(true);
+    }
   };
 
   // ===== UI =====
@@ -258,9 +314,11 @@ export default function Page() {
               </p>
               <button
                 onClick={handleFollow}
-                className="w-full px-4 py-2 rounded-xl bg-black text-white text-sm"
+                disabled={followChecking || !viewerFid}
+                className="w-full px-4 py-2 rounded-xl bg黑 text-white text-sm disabled:opacity-60"
+                title={!viewerFid ? "Open inside Warpcast to continue" : undefined}
               >
-                Follow in Warpcast
+                {followChecking ? "Waiting for follow…" : "Follow in Warpcast"}
               </button>
             </div>
           </div>
