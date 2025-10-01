@@ -38,7 +38,7 @@ async function searchCasts(sinceISO: string, cursor?: string) {
   const u = new URL(`${API}/cast/search`);
   u.searchParams.set("q", "lang:ru OR lang:en"); // сузили выборку (можно поменять)
   u.searchParams.set("limit", "100");
-  u.searchParams.set("after", sinceISO); // в v2 можно через after:YYYY… (аналог since)
+  u.searchParams.set("since", sinceISO); // в v2 можно через after:YYYY… (аналог since)
   if (cursor) u.searchParams.set("cursor", cursor);
 
   const r = await fetch(u, { headers: { "x-api-key": KEY, accept: "application/json" } });
