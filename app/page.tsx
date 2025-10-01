@@ -372,7 +372,7 @@ export default function Page() {
             ctx?.client?.added ??
             ctx?.miniApp?.added ??
             (Array.isArray(ctx?.client?.apps)
-              ? ctx.client.apps.some((a: any) => a?.id и a?.added)
+              ? ctx.client.apps.some((a: any) => a?.id && a?.added)
               : undefined);
           if (added === true) setIsAdded(true);
         } catch {}
