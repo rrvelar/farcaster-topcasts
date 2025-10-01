@@ -5,26 +5,4 @@
     "signature": "qK2tTT4/YE53EEcgMt9obeMYoTdOYGkLgBmc0N60VK5MwntMoxkeAlGwwZspbEnnzABeIsxcoC3flh1Yb6ogUxs="
   }
 }
-{
-  "miniapp": {
-    "version": "1",
-    "name": "Top Casts",
-    "homeUrl": "https://farcaster-topcasts.vercel.app",
-    "iconUrl": "https://farcaster-topcasts.vercel.app/icon.png",
-    "splashImageUrl": "https://farcaster-topcasts.vercel.app/icon.png",
-    "splashBackgroundColor": "#ffffff",
-    "subtitle": "Top Casts",
-    "description": "Raply Likes Recasts ranks",
-    "primaryCategory": "news-media",
-    "ogTitle": "Top Casts · Farcaster",
-    "ogDescription": "Top casts in a Day",
-    "ogImageUrl": "https://farcaster-topcasts.vercel.app/og.png"
-  }
-}
-{
-  "accountAssociation": {
-    "header": "eyJmaWQiOjIzMzgwLCJ0eXBlIjoiYXV0aCIsImtleSI6IjB4Yzk3OTYwQ2M1NkVDOUFkYzNkMjlhRWJjMkNlMDU1ZmM4MjJkRTI1NCJ9",
-    "payload": "eyJkb21haW4iOiJmYXJjYXN0ZXItdG9wY2FzdHMudmVyY2VsLmFwcCJ9",
-    "signature": "qK2tTT4/YE53EEcgMt9obeMYoTdOYGkLgBmc0N60VK5MwntMoxkeAlGwwZspbEnnzABeIsxcoC3flh1Yb6ogUxs="
-  }
-}
+
