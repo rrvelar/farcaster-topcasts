@@ -1,8 +1,36 @@
 {
+  "frame": {
+    "name": "Top Casts",
+    "version": "1",
+    "iconUrl": "https://farcaster-topcasts.vercel.app/icon-512.png",
+    "homeUrl": "https://farcaster-topcasts.vercel.app",
+    "subtitle": "Daily ranking of the most engaged Farcaster casts",
+    "description": "See the best Farcaster casts at a glance. We track replies, likes and recasts, aggregate the last 24 hours and rank posts by engagement. Clean, fast, mini app",
+    "primaryCategory": "news-media",
+    "screenshotUrls": [
+      "https://farcaster-topcasts.vercel.app/shot-1.png"
+    ],
+    "imageUrl": "https://farcaster-topcasts.vercel.app/og.png",
+    "heroImageUrl": "https://farcaster-topcasts.vercel.app/og.png",
+    "splashImageUrl": "https://farcaster-topcasts.vercel.app/icon-512.png",
+    "splashBackgroundColor": "#FFFFFF",
+    "tags": [
+      "farcaster",
+      "ranking",
+      "casts",
+      "miniapp",
+      "social"
+    ],
+    "tagline": "Top Farcaster posts in one app",
+    "buttonTitle": "Open Top Casts",
+    "ogTitle": "Top Casts - Farcaster",
+    "ogDescription": "Best Farcaster casts of the last 24 hours by replies, likes and recasts",
+    "ogImageUrl": "https://farcaster-topcasts.vercel.app/og.png",
+    "castShareUrl": "https://farcaster-topcasts.vercel.app"
+  },
   "accountAssociation": {
     "header": "eyJmaWQiOjIzMzgwLCJ0eXBlIjoiYXV0aCIsImtleSI6IjB4Yzk3OTYwQ2M1NkVDOUFkYzNkMjlhRWJjMkNlMDU1ZmM4MjJkRTI1NCJ9",
-    "payload": "eyJkb21haW4iOiJmYXJjYXN0ZXItdG9wY2FzdHMudmVyY2VsLmFwcCJ9",
-    "signature": "qK2tTT4/YE53EEcgMt9obeMYoTdOYGkLgBmc0N60VK5MwntMoxkeAlGwwZspbEnnzABeIsxcoC3flh1Yb6ogUxs="
+    "payload": "eyJkb21haW4iOiIifQ",
+    "signature": "pMxNoPzhl5K4bp6txYgdFCqQU6Q70xDGW2MpzOjGHUlzP4gP0PCjWFaQaw+WbCBXNDd6kZvvIAdMJ7ON/rdwTBw="
   }
 }
-
