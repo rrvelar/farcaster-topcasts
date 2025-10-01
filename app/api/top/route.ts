@@ -1,4 +1,4 @@
-import { sql } from "@vercel/postgres";
+import { sql } from "@/app/_db";
 import { NextResponse } from "next/server";
 
 export const revalidate = 0;
