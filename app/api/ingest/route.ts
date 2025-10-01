@@ -32,10 +32,9 @@ function isoMinus(minutes: number) {
 const callTimestamps: number[] = [];
 async function respectRateLimit() {
   const now = Date.now();
-  // удалить все старше 60 сек
   while (callTimestamps.length && now - callTimestamps[0] > 60_000) callTimestamps.shift();
   if (callTimestamps.length >= MAX_REQUESTS_PER_MIN) {
-    const wait = 60_000 - (now - callTimestamps[0]) + 50; // небольшой запас
+    const wait = 60_000 - (now - callTimestamps[0]) + 50;
     await sleep(wait);
   }
   callTimestamps.push(Date.now());
@@ -193,38 +192,44 @@ export async function GET(req: Request) {
     let pagesFetched = 0;
 
     if (hours > 0) {
-      // --- режим SLICING: без fan-out по q, чтобы не взорвать лимит ---
+      // --- SLICING: для надёжности собираем q="*" + since + sort=desc_chron ---
       const end = new Date();
       const start = new Date(end.getTime() - hours * 60 * 60 * 1000);
+      const sliceMs = sliceMinutes * 60 * 1000;
+      const pagesPerSlice = SLICE_PAGES_PER_CHUNK; // обычно 1
 
-      for (let t = start.getTime(); t < end.getTime(); t += sliceMinutes * 60 * 1000) {
+      for (let t = start.getTime(); t < end.getTime(); t += sliceMs) {
         const sliceStart = new Date(t);
-        const sliceEnd = new Date(Math.min(t + sliceMinutes * 60 * 1000, end.getTime()));
+        const sliceEnd = new Date(Math.min(t + sliceMs, end.getTime()));
         let cursor: string | undefined = undefined;
         let pages = 0;
 
         do {
-          const page = await searchSmart(sliceStart.toISOString(), cursor, {
-            qOverride,
-            sort: "chron",
-            fanOut: false,
+          const page = await searchPage({
+            q: "*", // проверенно-рабочий широкй запрос
+            timeKey: "since",
+            sinceISO: sliceStart.toISOString(),
+            cursor,
+            sort: "desc_chron",
           });
+
           if (page.casts?.length) {
             const inWindow = page.casts.filter((c: any) => {
               const ts = new Date(c.timestamp).getTime();
               return ts >= sliceStart.getTime() && ts <= sliceEnd.getTime();
             });
-            found.push(...inWindow);
+            if (inWindow.length) found.push(...inWindow);
           }
+
           cursor = page.cursor;
           pages += 1;
           pagesFetched += 1;
 
-          if (pages >= SLICE_PAGES_PER_CHUNK || !cursor) break;
+          if (pages >= pagesPerSlice || !cursor) break;
           await sleep(SLEEP_MS);
         } while (true);
 
-        await sleep(SLEEP_MS); // между слайсами
+        await sleep(SLEEP_MS); // пауза между слайсами
       }
     } else {
       // --- инкрементальный прогон: можно включить fan-out по q ---
