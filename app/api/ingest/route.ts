@@ -8,7 +8,7 @@ const MANUAL_TOKEN = process.env.INGEST_TOKEN || "";
 
 // --- анти-расход Neynar ---
 const PAGE_LIMIT = 8;            // max страниц за прогон (<= 800 кастов)
-const SLEEP_MS = 1500;           // пауза между запросами (чтобы не ловить 429)
+const SLEEP_MS = 2000;           // пауза между запросами (чтобы не ловить 429)
 const REACTION_BATCH = 100;      // батч реакций
 const MIN_INTERVAL_MIN = 12;     // пропускаем запуск, если был <12 мин назад
 
@@ -36,7 +36,7 @@ async function upsertState(fields: { last_ts?: string; updated_at?: string }) {
 // ---- CAST SEARCH ----
 async function fetchRecentCasts(sinceISO: string, cursor?: string) {
   const u = new URL(`${API}/cast/search`);
-  u.searchParams.set("q", "*");        // любые касты (при желании сузим позже)
+  u.searchParams.set("q", "lang:en");
   u.searchParams.set("limit", "100");
   u.searchParams.set("since", sinceISO);
   if (cursor) u.searchParams.set("cursor", cursor);
