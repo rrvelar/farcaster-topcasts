@@ -7,12 +7,12 @@ const KEY = process.env.NEYNAR_API_KEY!;
 const MANUAL_TOKEN = process.env.INGEST_TOKEN || "";
 
 // --- анти-расход Neynar ---
-const PAGE_LIMIT = 8;            // max страниц за прогон (<= 800 кастов)
-const SLEEP_MS = 2000;           // пауза между запросами (чтобы не ловить 429)
-const REACTION_BATCH = 100;      // батч реакций
-const MIN_INTERVAL_MIN = 12;     // пропускаем запуск, если был <12 мин назад
+const PAGE_LIMIT = 3;         // не более 5 страниц cast/search за запуск (~500 кастов)
+const SLEEP_MS = 2000;        // 2s пауза между запросами
+const BULK_BATCH = 100;       // сколько хэшей отправлять в /casts за раз
+const MIN_INTERVAL_MIN = 15;  // пропускать, если запускали <15 мин назад
 
-function sleep(ms: number) { return new Promise((r) => setTimeout(r, ms)); }
+function sleep(ms: number) { return new Promise(r => setTimeout(r, ms)); }
 function isoMinus(minutes: number) {
   const d = new Date(); d.setUTCMinutes(d.getUTCMinutes() - minutes, 0, 0); return d.toISOString();
 }
@@ -33,19 +33,17 @@ async function upsertState(fields: { last_ts?: string; updated_at?: string }) {
   `, [last_ts, updated_at]);
 }
 
-// ---- CAST SEARCH ----
-async function fetchRecentCasts(sinceISO: string, cursor?: string) {
+// ---- CAST SEARCH (без счётчиков) ----
+async function searchCasts(sinceISO: string, cursor?: string) {
   const u = new URL(`${API}/cast/search`);
-  u.searchParams.set("q", "lang:en");
+  u.searchParams.set("q", "lang:ru OR lang:en"); // сузили выборку (можно поменять)
   u.searchParams.set("limit", "100");
-  u.searchParams.set("since", sinceISO);
+  u.searchParams.set("after", sinceISO); // в v2 можно через after:YYYY… (аналог since)
   if (cursor) u.searchParams.set("cursor", cursor);
 
   const r = await fetch(u, { headers: { "x-api-key": KEY, accept: "application/json" } });
-  if (!r.ok) {
-    const text = await r.text();
-    throw new Error(`Neynar cast/search ${r.status}: ${text}`);
-  }
+  if (!r.ok) throw new Error(`Neynar cast/search ${r.status}: ${await r.text()}`);
+
   const data = await r.json();
   const result = data?.result ?? data;
   const casts = Array.isArray(result?.casts) ? result.casts :
@@ -54,30 +52,32 @@ async function fetchRecentCasts(sinceISO: string, cursor?: string) {
   return { casts, cursor: nextCursor } as { casts: any[]; cursor?: string };
 }
 
-// ---- REACTION COUNTS ----
-async function fetchReactionCounts(hashes: string[]) {
-  const r = await fetch(`${API}/reaction/counts`, {
-    method: "POST",
-    headers: { "x-api-key": KEY, "content-type": "application/json", accept: "application/json" },
-    body: JSON.stringify({ cast_hashes: hashes })
-  });
-  if (!r.ok) {
-    const text = await r.text();
-    throw new Error(`Neynar reaction/counts ${r.status}: ${text}`);
+// ---- BULK CASTS (со счётчиками) ----
+async function fetchBulkCasts(hashes: string[]) {
+  // делим на пачки по BULK_BATCH
+  const out: any[] = [];
+  for (let i = 0; i < hashes.length; i += BULK_BATCH) {
+    const chunk = hashes.slice(i, i + BULK_BATCH);
+    const u = new URL(`${API}/casts`);
+    u.searchParams.set("casts", chunk.join(","));
+    const r = await fetch(u, { headers: { "x-api-key": KEY, accept: "application/json" } });
+    if (!r.ok) throw new Error(`Neynar casts ${r.status}: ${await r.text()}`);
+    const data = await r.json();
+    const result = data?.result ?? data;
+    const casts = Array.isArray(result?.casts) ? result.casts : [];
+    out.push(...casts);
+    if (i + BULK_BATCH < hashes.length) await sleep(SLEEP_MS);
   }
-  const data = await r.json();
-  const counts = Array.isArray(data?.counts) ? data.counts :
-                 Array.isArray(data?.result?.counts) ? data.result.counts : [];
-  return counts as Array<{ cast_hash: string; likes: number; recasts: number; replies: number }>;
+  return out; // объекты каста: reactions.likes_count / recasts_count / replies.count
 }
 
 export const revalidate = 0;
 
 export async function GET(req: Request) {
   try {
-    // 0) запрет публичного вызова
+    // защита от публичного вызова
     const h = headers();
-    const isCron = h.get("x-vercel-cron") === "1";               // приходит от Vercel Cron
+    const isCron = h.get("x-vercel-cron") === "1";
     const token = new URL(req.url).searchParams.get("token");
     if (!isCron && token !== MANUAL_TOKEN) {
       return NextResponse.json({ error: "forbidden" }, { status: 403 });
@@ -85,7 +85,7 @@ export async function GET(req: Request) {
 
     if (!KEY) return NextResponse.json({ error: "NEYNAR_API_KEY missing" }, { status: 500 });
 
-    // 1) скипаем, если запускали недавно
+    // cкипаем, если запускали недавно
     const st = await getState();
     if (st?.updated_at) {
       const diffMin = (Date.now() - new Date(st.updated_at).getTime()) / 60000;
@@ -93,37 +93,32 @@ export async function GET(req: Request) {
         return NextResponse.json({ skipped: true, reason: "too_soon", lastRunMinAgo: Number(diffMin.toFixed(1)) });
       }
     }
-    // сразу отметим старт
     await upsertState({ updated_at: new Date().toISOString() });
 
-    // окно: с последнего ts - 5 минут буфер; если первый раз — 24ч
+    // окно: после last_ts с 5-минутным буфером; первый запуск — 24ч
     const since = st?.last_ts
       ? new Date(new Date(st.last_ts).getTime() - 5 * 60 * 1000).toISOString()
       : isoMinus(24 * 60);
 
-    // 2) подкачка страниц с лимитом и паузой
+    // 1) тащим страницы поиска, но без счётчиков
     let cursor: string | undefined;
-    const all: any[] = [];
+    const found: any[] = [];
     let pages = 0;
     do {
-      const page = await fetchRecentCasts(since, cursor);
-      if (Array.isArray(page.casts) && page.casts.length) {
-        all.push(...page.casts);
-      }
+      const page = await searchCasts(since, cursor);
+      if (page.casts?.length) found.push(...page.casts);
       cursor = page.cursor;
       pages += 1;
       if (pages >= PAGE_LIMIT || !cursor) break;
       await sleep(SLEEP_MS);
     } while (true);
 
-    if (all.length === 0) {
+    if (found.length === 0) {
       return NextResponse.json({ upserted: 0, pagesFetched: pages, note: "no new casts" });
     }
 
-    // 3) реакции — ТОЛЬКО для новых hash, которых нет в top_casts
-    // соберём список уникальных hash
-    const uniq = Array.from(new Set(all.map((c: any) => c.hash)));
-    // спросим БД, какие уже есть
+    // 2) возьмём только НОВЫЕ хэши и спросим их одним bulk-запросом (со счётчиками)
+    const uniq = Array.from(new Set(found.map((c: any) => c.hash)));
     const placeholders = uniq.map((_, i) => `$${i + 1}`).join(",");
     const existing = await sql.unsafe(
       `select cast_hash from top_casts where cast_hash in (${placeholders})`,
@@ -132,33 +127,27 @@ export async function GET(req: Request) {
     const existingSet = new Set(existing.map((r: any) => r.cast_hash));
     const onlyNew = uniq.filter((h) => !existingSet.has(h));
 
-    const counts: any[] = [];
-    for (let i = 0; i < onlyNew.length; i += REACTION_BATCH) {
-      const batch = onlyNew.slice(i, i + REACTION_BATCH);
-      const cc = await fetchReactionCounts(batch);
-      counts.push(...cc);
-      if (i + REACTION_BATCH < onlyNew.length) await sleep(SLEEP_MS);
-    }
+    const withCounts = onlyNew.length ? await fetchBulkCasts(onlyNew) : [];
 
-    // 4) мерж + score
-    const byHash = new Map(all.map((c: any) => [c.hash, c]));
-    const rows = counts.map((r: any) => {
-      const c = byHash.get(r.cast_hash) || {};
-      const likes = r.likes ?? 0;
-      const recasts = r.recasts ?? 0;
-      const replies = r.replies ?? 0;
+    // 3) строим строки для upsert
+    const byHash = new Map(withCounts.map((c: any) => [c.hash, c]));
+    const rows = onlyNew.map((hash) => {
+      const c = byHash.get(hash) || {};
+      const likes = c?.reactions?.likes_count ?? 0;
+      const recasts = c?.reactions?.recasts_count ?? 0;
+      const replies = c?.replies?.count ?? 0;
       const score = replies * 10 + recasts * 3 + likes;
       return {
-        cast_hash: r.cast_hash,
+        cast_hash: hash,
         fid: c?.author?.fid ?? null,
         text: c?.text ?? "",
         channel: c?.channel?.id ?? null,
         timestamp: c?.timestamp ?? new Date().toISOString(),
         likes, recasts, replies, score
       };
-    });
+    }).filter(r => r.fid !== null); // отбрасываем странные пустышки
 
-    // 5) upsert
+    // 4) upsert
     if (rows.length) {
       const values = rows.map((_, i) =>
         `($${i*9+1}, $${i*9+2}, $${i*9+3}, $${i*9+4}, $${i*9+5}, $${i*9+6}, $${i*9+7}, $${i*9+8}, $${i*9+9})`
@@ -186,7 +175,7 @@ export async function GET(req: Request) {
       );
     }
 
-    // 6) обновим маркеры в ingest_state
+    // 5) обновим last_ts
     const maxTs = rows.reduce<string | null>((acc, r: any) => {
       const t = r.timestamp ? new Date(r.timestamp).toISOString() : null;
       if (!t) return acc;
@@ -198,8 +187,8 @@ export async function GET(req: Request) {
     return NextResponse.json({
       upserted: rows.length,
       pagesFetched: pages,
-      scanned: all.length,
-      newHashes: onlyNew.length,
+      scanned: found.length,
+      requestedBulk: onlyNew.length,
       skippedExisting: uniq.length - onlyNew.length
     });
   } catch (e: any) {
