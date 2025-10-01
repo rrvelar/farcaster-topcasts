@@ -1,3 +1,4 @@
+// app/api/ingest/route.ts
 import { NextResponse } from "next/server";
 import { headers } from "next/headers";
 import { sql } from "../../_db";
@@ -7,6 +8,7 @@ import { sql } from "../../_db";
  * - Поиск: q="*" + since=ISO, sort_type=algorithmic (фоллбек на desc_chron)
  * - Берём ENG_PAGES страниц (по умолчанию 5)
  * - Детали через /casts, upsert c greatest(...)
+ * - NEW: апсертим авторов (username/display_name/pfp_url) из поиска и из /casts
  */
 
 const API = "https://api.neynar.com/v2/farcaster";
@@ -84,8 +86,63 @@ async function fetchRL(input: RequestInfo | URL, init?: RequestInit, retries = 2
   return r;
 }
 
+// ---- helpers для авторов (аватар/имя/ник) ----
+function pickPfpUrl(author: any): string | null {
+  if (!author) return null;
+  return author.pfp_url
+      ?? author.pfp?.url
+      ?? author.profile?.pfp_url
+      ?? null;
+}
+
+function normalizeAuthor(a: any) {
+  if (!a || typeof a.fid !== "number") return null;
+  return {
+    fid: a.fid,
+    username: a.username ?? null,
+    display_name: a.display_name ?? null,
+    pfp_url: pickPfpUrl(a),
+  };
+}
+
+async function upsertAuthors(authorsRaw: any[]) {
+  const cleaned = authorsRaw.map(normalizeAuthor).filter(Boolean) as Array<{
+    fid: number; username: string | null; display_name: string | null; pfp_url: string | null;
+  }>;
+  if (cleaned.length === 0) return 0;
+
+  // дедуп по fid
+  const map = new Map<number, (typeof cleaned)[number]>();
+  for (const a of cleaned) if (!map.has(a.fid)) map.set(a.fid, a);
+  const authors = Array.from(map.values());
+
+  const values = authors.map((_, i) =>
+    `($${i*4+1}, $${i*4+2}, $${i*4+3}, $${i*4+4})`
+  ).join(",");
+
+  const params = authors.flatMap(a => [a.fid, a.username, a.display_name, a.pfp_url]);
+
+  await sql.unsafe(
+    `
+    insert into users (fid, username, display_name, pfp_url)
+    values ${values}
+    on conflict (fid) do update set
+      username = coalesce(excluded.username, users.username),
+      display_name = coalesce(excluded.display_name, users.display_name),
+      pfp_url = coalesce(excluded.pfp_url, users.pfp_url),
+      updated_at = now()
+    `,
+    params
+  );
+  return authors.length;
+}
+
 // ---- одна страница cast/search (q="*", since=ISO, sort_type=...) ----
-async function searchPageSince(sinceISO: string, cursor?: string, sort: "algorithmic" | "desc_chron" = "algorithmic") {
+async function searchPageSince(
+  sinceISO: string,
+  cursor?: string,
+  sort: "algorithmic" | "desc_chron" = "algorithmic"
+) {
   if (REQ_SEARCH >= MAX_SEARCH_REQ) return { casts: [], cursor: undefined, aborted: "budget" as const };
 
   const u = new URL(`${API}/cast/search`);
@@ -163,7 +220,7 @@ async function runEngagementOnly(hours: number) {
     await sleep(SLEEP_MS);
   } while (true);
 
-  // 2) если собрали мало/пусто — один прогон фоллбеком desc_chron (чуть дешевле)
+  // 2) если собрали мало/пусто — один прогон фоллбеком desc_chron
   if (collected.length === 0 && REQ_SEARCH < MAX_SEARCH_REQ) {
     cursor = undefined;
     pages = 0;
@@ -236,58 +293,26 @@ export async function GET(req: Request) {
     // дедуп по hash
     const uniq = Array.from(new Set(items.map((c: any) => c.hash)));
 
+    // --- NEW: апсерт авторов из результатов ПОИСКА (до /casts) ---
+    try {
+      const authorsFromSearch = (items || []).map((c: any) => c?.author).filter(Boolean);
+      await upsertAuthors(authorsFromSearch);
+    } catch (e) {
+      console.warn("users upsert (search) skipped:", e);
+    }
+
     // детали и счётчики
     const withCounts = await fetchBulkCasts(uniq);
-    // --- NEW: апсертим авторов в таблицу users (без доп. запросов к Neynar) ---
-try {
-  const authorsRaw = withCounts
-    .map((c: any) => c?.author)
-    .filter((a: any) => a && typeof a.fid === "number");
 
-  if (authorsRaw.length) {
-    // дедуп по fid
-    const map = new Map<number, any>();
-    for (const a of authorsRaw) {
-      if (!map.has(a.fid)) {
-        map.set(a.fid, {
-          fid: a.fid,
-          username: a.username ?? null,
-          display_name: a.display_name ?? null,
-          pfp_url: a.pfp?.url ?? null,
-        });
-      }
+    // --- NEW: апсерт авторов из /casts (часто богаче по данным) ---
+    try {
+      const authorsFromCasts = (withCounts || []).map((c: any) => c?.author).filter(Boolean);
+      await upsertAuthors(authorsFromCasts);
+    } catch (e) {
+      console.warn("users upsert (casts) skipped:", e);
     }
-    const authors = Array.from(map.values());
 
-    const values = authors
-      .map((_, i) => `($${i * 4 + 1}, $${i * 4 + 2}, $${i * 4 + 3}, $${i * 4 + 4})`)
-      .join(",");
-    const params = authors.flatMap((u: any) => [
-      u.fid,
-      u.username,
-      u.display_name,
-      u.pfp_url,
-    ]);
-
-    await sql.unsafe(
-      `
-      insert into users (fid, username, display_name, pfp_url)
-      values ${values}
-      on conflict (fid) do update set
-        username = coalesce(excluded.username, users.username),
-        display_name = coalesce(excluded.display_name, users.display_name),
-        pfp_url = coalesce(excluded.pfp_url, users.pfp_url),
-        updated_at = now()
-      `,
-      params
-    );
-  }
-} catch (e) {
-  console.warn("users upsert skipped:", e);
-}
-
-
-    // upsert
+    // upsert топ-кастов
     const byHash = new Map(withCounts.map((c: any) => [c.hash, c]));
     const rows = uniq.map((hash) => {
       const c = byHash.get(hash) || {};
