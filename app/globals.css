@@ -1,8 +1,9 @@
-/* app/globals.css */
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
-/* мелкие настройки */
-:root { color-scheme: light; }
-html, body { height: 100%; }
+/* быстрый индикатор, что CSS вообще загрузился */
+body { background-color: #f6f7fb; }
+
+/* опционально: тонкая сетка для отладки верстки */
+/* * { outline-color: rgba(0,0,0,.06); outline-style: solid; outline-width: 0px } */
