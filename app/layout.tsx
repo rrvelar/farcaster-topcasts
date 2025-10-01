@@ -12,7 +12,7 @@ const miniAppEmbed = {
   version: "next",
   imageUrl: `${APP_URL}/og.png`, // 1200x630 (должен существовать в /public/og.png)
   button: {
-    title: "Открыть топ-касты",
+    title: "Open Top Casts",
     action: {
       type: "launch_miniapp",
       name: "Top Casts",
@@ -25,13 +25,13 @@ const miniAppEmbed = {
 
 export const metadata: Metadata = {
   title: "Топ кастов — Farcaster",
-  description: "Мини-приложение: топ постов Farcaster по лайкам, реплаям и рекастам.",
+  description: "Mini app Top Farcaster's casts",
   applicationName: "Farcaster Top Casts",
   icons: { icon: "/favicon.ico" },
   openGraph: {
-    title: "Топ кастов — Farcaster",
+    title: "Top Casts Farcaster",
     description:
-      "Топ-10/15 постов Farcaster по лайкам, реплаям и рекастам за выбранный период.",
+      "Top-10/15 casts Farcaster ",
     url: APP_URL,
     siteName: "Farcaster Top Casts",
     type: "website",
