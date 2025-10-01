@@ -12,7 +12,7 @@ function sinceISO(hours = 24) {
 
 async function fetchRecentCasts(cursor?: string) {
   const u = new URL(`${API}/cast/search`);
-  u.searchParams.set("q", "");
+u.searchParams.set("q", "*"); // wildcard: вернуть любые касты
   u.searchParams.set("limit", "100");
   u.searchParams.set("since", sinceISO(24));
   if (cursor) u.searchParams.set("cursor", cursor);
