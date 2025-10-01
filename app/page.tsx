@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { sdk } from "@farcaster/miniapp-sdk";
 
+// ── types ─────────────────────────────────────────────────────────────────────
 type Cast = {
   cast_hash: string;
   fid: number;
@@ -16,6 +17,8 @@ type Cast = {
   username?: string | null;
   display_name?: string | null;
   pfp_url?: string | null;
+  // если появится в выдаче/БД — покажем во всплывашке
+  followers?: number | null;
 };
 
 const METRICS = [
@@ -31,7 +34,7 @@ const RANGES = [
   { key: "7d", label: "7 days" },
 ] as const;
 
-// URLs
+// ── URLs ──────────────────────────────────────────────────────────────────────
 function makeCastUrl(hash: string, username?: string | null) {
   if (username && username.trim()) return `https://warpcast.com/${username}/${hash}`;
   return `https://warpcast.com/~/cast/${hash}`;
@@ -41,7 +44,15 @@ function makeProfileUrl(fid: number, handle?: string) {
   return `https://warpcast.com/~/profiles/${fid}`;
 }
 
-// Promo account
+// красивый формат для фолловеров
+function formatNum(n?: number | null) {
+  if (typeof n !== "number") return "";
+  if (n < 1_000) return String(n);
+  if (n < 1_000_000) return (n / 1_000).toFixed(n % 1000 === 0 ? 0 : 1) + "K";
+  return (n / 1_000_000).toFixed(n % 1_000_000 === 0 ? 0 : 1) + "M";
+}
+
+// ── Promo account ─────────────────────────────────────────────────────────────
 const PROMO_FID = Number(process.env.NEXT_PUBLIC_PROMO_FID || "0");
 const PROMO_HANDLE = (process.env.NEXT_PUBLIC_PROMO_HANDLE || "").trim();
 
@@ -153,7 +164,7 @@ export default function Page() {
         let { added, fid } = compute(ctx);
         setViewerFid(typeof fid === "number" ? fid : null);
 
-        // Fallback to cache if added is undefined/false but cache says true
+        // Fallback to cache
         const cachedAdded = readAddedCache(typeof fid === "number" ? fid : null);
         if (added === undefined || added === false) {
           if (cachedAdded) {
@@ -187,7 +198,7 @@ export default function Page() {
           });
         }
 
-        // subscribe and schedule rechecks (контекст иногда запаздывает)
+        // subscribe + delayed rechecks
         const recheck = async () => {
           try {
             const c = await getCtx();
@@ -196,7 +207,6 @@ export default function Page() {
 
             if (typeof f === "number" && f !== viewerFid) {
               setViewerFid(f);
-              // при смене аккаунта — читаем его кэш
               const addCache = readAddedCache(f);
               if (a === undefined || a === false) {
                 setIsAdded(addCache);
@@ -217,16 +227,6 @@ export default function Page() {
               } else {
                 setIsAdded(!!a);
               }
-            }
-
-            if (wantDebug) {
-              setDebugInfo((d) => ({
-                ...(d || {}),
-                recheck: Date.now(),
-                addedReported: a,
-                cachedAddedNow: readAddedCache(viewerFid),
-                viewerFidNow: f ?? viewerFid,
-              }));
             }
           } catch {}
         };
@@ -265,11 +265,8 @@ export default function Page() {
   const handleAddMiniApp = async () => {
     try {
       await sdk.actions.addMiniApp();
-      // сразу ставим кэш, чтобы гейт не мигал при ре-открытии
       writeAddedCache(viewerFid, true);
       setIsAdded(true);
-
-      // и пытаемся подтвердить контекстом через секунду
       setTimeout(async () => {
         try {
           const ctx =
@@ -339,7 +336,7 @@ export default function Page() {
         </div>
       )}
 
-      {/* Gate #2: Follow (disabled for the owner’s own account) */}
+      {/* Gate #2: Follow */}
       {isMiniApp && isAdded && PROMO_FID > 0 && viewerFid !== null && viewerFid !== PROMO_FID && !followConfirmed && (
         <div className="fixed inset-0 z-[50] bg-white/60 backdrop-blur-[2px]">
           <div className="absolute inset-x-0 bottom-0 p-4 pb-[max(env(safe-area-inset-bottom),1rem)]">
@@ -412,28 +409,38 @@ export default function Page() {
           <article key={c.cast_hash} className="h-full rounded-2xl border bg-white shadow-sm p-4 flex flex-col">
             <header className="mb-3 flex items-center justify-between">
               <div className="text-xs text-gray-500">#{idx + 1}</div>
-              <div className="flex items-center gap-2 min-w-0">
-                {c.pfp_url ? (
-                  // eslint-disable-next-line @next/next/no-img-element
-                  <img src={c.pfp_url} alt="" className="w-6 h-6 rounded-full object-cover" referrerPolicy="no-referrer" />
-                ) : (
-                  <div className="w-6 h-6 rounded-full bg-gray-200" />
-                )}
-                <a
-                  className="text-sm font-medium hover:underline truncate"
-                  href={`https://warpcast.com/~/profiles/${c.fid}`}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  title={`fid:${c.fid}`}
-                >
-                  {c.display_name || (c.username ? `@${c.username}` : `fid:${c.fid}`)}
-                </a>
-                {c.channel ? (
-                  <span className="ml-1 shrink-0 text-xs bg-gray-100 px-2 py-0.5 rounded-full">#{c.channel}</span>
-                ) : (
-                  <span className="ml-1 shrink-0 text-xs text-gray-400">no channel</span>
-                )}
-              </div>
+
+              {/* <<< ХОВЕР-ПРЕВЬЮ ПРОФИЛЯ >>> */}
+              <HoverProfile
+                fid={c.fid}
+                pfpUrl={c.pfp_url || undefined}
+                displayName={c.display_name || undefined}
+                username={c.username || undefined}
+                followers={c.followers ?? undefined}
+              >
+                <div className="flex items-center gap-2 min-w-0">
+                  {c.pfp_url ? (
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img src={c.pfp_url} alt="" className="w-6 h-6 rounded-full object-cover" referrerPolicy="no-referrer" />
+                  ) : (
+                    <div className="w-6 h-6 rounded-full bg-gray-200" />
+                  )}
+                  <a
+                    className="text-sm font-medium hover:underline truncate"
+                    href={`https://warpcast.com/~/profiles/${c.fid}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    title={`fid:${c.fid}`}
+                  >
+                    {c.display_name || (c.username ? `@${c.username}` : `fid:${c.fid}`)}
+                  </a>
+                  {c.channel ? (
+                    <span className="ml-1 shrink-0 text-xs bg-gray-100 px-2 py-0.5 rounded-full">#{c.channel}</span>
+                  ) : (
+                    <span className="ml-1 shrink-0 text-xs text-gray-400">no channel</span>
+                  )}
+                </div>
+              </HoverProfile>
             </header>
 
             <p className="whitespace-pre-wrap text-sm leading-5 line-clamp-6 text-gray-900">{c.text}</p>
@@ -483,5 +490,85 @@ function Badge({ label, value, active }: { label: string; value: number; active?
       <span>{label}</span>
       <span className="tabular-nums">{value ?? 0}</span>
     </span>
+  );
+}
+
+/** HoverProfile — всплывающее превью на hover / long-press (мобайл).
+ *  Не делает сетевых запросов, использует данные из карточки.
+ */
+function HoverProfile({
+  fid,
+  pfpUrl,
+  displayName,
+  username,
+  followers,
+  children,
+}: {
+  fid: number;
+  pfpUrl?: string;
+  displayName?: string;
+  username?: string;
+  followers?: number;
+  children: React.ReactNode;
+}) {
+  const [open, setOpen] = useState(false);
+  const holdTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const show = () => setOpen(true);
+  const hide = () => setOpen(false);
+
+  // long-press для тача
+  const onTouchStart = () => {
+    holdTimer.current = setTimeout(() => setOpen(true), 350);
+  };
+  const onTouchEnd = () => {
+    if (holdTimer.current) clearTimeout(holdTimer.current);
+    holdTimer.current = null;
+    setOpen(false);
+  };
+
+  return (
+    <div
+      className="relative"
+      onMouseEnter={show}
+      onMouseLeave={hide}
+      onTouchStart={onTouchStart}
+      onTouchEnd={onTouchEnd}
+    >
+      {children}
+
+      {open && (
+        <div className="absolute right-0 top-8 z-50 w-72 rounded-2xl border bg-white shadow-xl p-3">
+          <div className="flex items-center gap-3">
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img
+              src={pfpUrl || "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw=="}
+              alt=""
+              className="w-16 h-16 rounded-full object-cover bg-gray-100"
+              referrerPolicy="no-referrer"
+            />
+            <div className="min-w-0">
+              <div className="font-medium truncate">
+                {displayName || (username ? `@${username}` : `fid:${fid}`)}
+              </div>
+              {username && <div className="text-xs text-gray-500 truncate">@{username}</div>}
+              {typeof followers === "number" && (
+                <div className="mt-1 text-xs text-gray-600">{formatNum(followers)} followers</div>
+              )}
+            </div>
+          </div>
+          <div className="mt-3">
+            <a
+              href={makeProfileUrl(fid, username)}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-sm text-blue-600 hover:underline"
+            >
+              Open profile ↗
+            </a>
+          </div>
+        </div>
+      )}
+    </div>
   );
 }
