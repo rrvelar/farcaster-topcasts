@@ -3,7 +3,7 @@
     "name": "Top Casts",
     "version": "1",
     "iconUrl": "https://farcaster-topcasts.vercel.app/icon-512.png",
-    "homeUrl": "https://farcaster-topcasts.vercel.app/",
+    "homeUrl": "https://farcaster-topcasts.vercel.app",
     "imageUrl": "https://farcaster-topcasts.vercel.app/preview.png",
     "buttonTitle": "Open Top Casts",
     "splashImageUrl": "https://farcaster-topcasts.vercel.app/splash.png",
@@ -25,7 +25,7 @@
     "ogTitle": "Top Casts Farcaster",
     "ogDescription": "Best Farcaster casts of the last 24 hours by replies, likes and recasts",
     "ogImageUrl": "https://farcaster-topcasts.vercel.app/preview2.png",
-    "castShareUrl": "https://warpcast.com/~/compose?text=Check+out+Top+Casts"
+    "castShareUrl": "https://farcaster-topcasts.vercel.app"
   },
   "accountAssociation": {
     "header": "eyJmaWQiOjIzMzgwLCJ0eXBlIjoiYXV0aCIsImtleSI6IjB4Yzk3OTYwQ2M1NkVDOUFkYzNkMjlhRWJjMkNlMDU1ZmM4MjJkRTI1NCJ9",
