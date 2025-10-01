@@ -12,20 +12,34 @@ const TOP_LANGS = (process.env.TOP_LANGS || "en,ru")
   .map((s) => s.trim())
   .filter(Boolean);
 
-// ---- лимиты/тайминги (можно править ENV) ----
-const SLEEP_MS = Number(process.env.SLEEP_MS || 2000);            // базовая пауза между вызовами
+// ---- лимиты/тайминги (ENV-переопределяемо) ----
+const SLEEP_MS = Number(process.env.SLEEP_MS || 2500);             // базовая пауза между вызовами
 const BULK_BATCH = 100;
-const MIN_INTERVAL_MIN = 15;                                      // анти-частота запусков
-const PAGE_LIMIT = Number(process.env.PAGE_LIMIT || 3);           // инкрементальный режим
-const BACKFILL_PAGE_LIMIT = Number(process.env.BACKFILL_PAGES || 10); // бэкфилл без slice
+const MIN_INTERVAL_MIN = 15;                                       // анти-частота запусков
+const PAGE_LIMIT = Number(process.env.PAGE_LIMIT || 3);            // инкрементальный режим
 const SLICE_MINUTES_DEFAULT = Number(process.env.SLICE_MINUTES || 60);
-const SLICE_PAGES_PER_CHUNK = Number(process.env.SLICE_PAGES || 1);   // 1 страница/слайс — щадяще
-const MAX_REQUESTS_PER_MIN = Number(process.env.RPM || 50);           // держим ниже 60/мин (Starter)
+const SLICE_PAGES_PER_CHUNK = Number(process.env.SLICE_PAGES || 1);// страниц на один слайс (1 = щадяще)
+const MAX_REQUESTS_PER_MIN = Number(process.env.RPM || 45);        // держим ниже 60/мин (Starter)
+const MAX_SEARCH_REQ = Number(process.env.MAX_SEARCH_REQ || 60);   // общий бюджет запросов cast/search за запуск
+const MAX_BULK_REQ   = Number(process.env.MAX_BULK_REQ   || 25);   // общий бюджет /casts за запуск
+const EMPTY_SLICE_ABORT = Number(process.env.EMPTY_SLICE_ABORT || 6); // прерываемся, если подряд пустых слайсов >= N
 
 // ------- утилиты -------
 function sleep(ms: number) { return new Promise(r => setTimeout(r, ms)); }
 function isoMinus(minutes: number) {
   const d = new Date(); d.setUTCMinutes(d.getUTCMinutes() - minutes, 0, 0); return d.toISOString();
+}
+
+// --- счётчики вызовов и бюджет ---
+let REQ_SEARCH = 0;
+let REQ_BULK = 0;
+function budgetLeft() {
+  return REQ_SEARCH < MAX_SEARCH_REQ && REQ_BULK < MAX_BULK_REQ;
+}
+function ensureBudget(kind: "search" | "bulk") {
+  if (kind === "search" && REQ_SEARCH >= MAX_SEARCH_REQ) return false;
+  if (kind === "bulk"   && REQ_BULK   >= MAX_BULK_REQ)   return false;
+  return true;
 }
 
 // простейший rate-limiter (скользящее окно по минуте)
@@ -34,18 +48,18 @@ async function respectRateLimit() {
   const now = Date.now();
   while (callTimestamps.length && now - callTimestamps[0] > 60_000) callTimestamps.shift();
   if (callTimestamps.length >= MAX_REQUESTS_PER_MIN) {
-    const wait = 60_000 - (now - callTimestamps[0]) + 50;
+    const wait = 60_000 - (now - callTimestamps[0]) + 100; // небольшой запас
     await sleep(wait);
   }
   callTimestamps.push(Date.now());
 }
 
-async function fetchRL(input: RequestInfo | URL, init?: RequestInit, retries = 3): Promise<Response> {
+async function fetchRL(input: RequestInfo | URL, init?: RequestInit, retries = 2): Promise<Response> {
   await respectRateLimit();
   const r = await fetch(input, init);
   if (r.status === 429 && retries > 0) {
     const ra = r.headers.get("retry-after");
-    const wait = ra ? Number(ra) * 1000 : (500 * Math.pow(2, 3 - retries)); // 4s -> 2s -> 1s
+    const wait = ra ? Number(ra) * 1000 : (800 * Math.pow(2, 2 - retries)); // 1.6s -> 0.8s
     await sleep(wait);
     return fetchRL(input, init, retries - 1);
   }
@@ -76,6 +90,7 @@ async function searchPage(params: {
   cursor?: string;
   sort: "desc_chron" | "chron" | "algorithmic";
 }) {
+  if (!ensureBudget("search")) return { casts: [], cursor: undefined, aborted: "budget" as const };
   const u = new URL(`${API}/cast/search`);
   u.searchParams.set("q", params.q);
   u.searchParams.set("limit", "100");
@@ -84,9 +99,12 @@ async function searchPage(params: {
   if (params.cursor) u.searchParams.set("cursor", params.cursor);
 
   const r = await fetchRL(u, { headers: { "x-api-key": KEY, accept: "application/json" } });
+  REQ_SEARCH += 1;
+
   if (!r.ok) {
     const txt = await r.text();
-    throw new Error(`Neynar cast/search (${params.timeKey}, q=${params.q}, sort=${params.sort}) ${r.status}: ${txt}`);
+    // На любой 4xx/5xx прекращаем дальнейшую пагинацию — экономим CU
+    return { casts: [], cursor: undefined, error: `Neynar cast/search (${params.timeKey}, q=${params.q}, sort=${params.sort}) ${r.status}: ${txt}` } as any;
   }
   const data = await r.json();
   const result = data?.result ?? data;
@@ -96,7 +114,7 @@ async function searchPage(params: {
   return { casts, cursor: nextCursor };
 }
 
-// ---- “умный” поиск: в инкрементальном режиме можно фэн-аутить, в бэкфилле — только baseQ ----
+// ---- “умный” поиск: в инкрементальном режиме — fan-out; в бэкфилле — только baseQ ----
 async function searchSmart(sinceISO: string, cursor: string | undefined, opts: {
   qOverride?: string;
   sort?: "desc_chron" | "chron" | "algorithmic";
@@ -120,6 +138,9 @@ async function searchSmart(sinceISO: string, cursor: string | undefined, opts: {
   for (const q of queries) {
     for (const timeKey of timeKeys) {
       const page = await searchPage({ q, timeKey, sinceISO, cursor, sort });
+      if ((page as any).aborted === "budget") return { casts: [], cursor: undefined, qUsed: q, timeKeyUsed: timeKey, aborted: "budget" as const };
+      if ((page as any).error) return { casts: [], cursor: undefined, qUsed: q, timeKeyUsed: timeKey, error: (page as any).error };
+
       if (page.casts.length > 0 || cursor) {
         return { ...page, qUsed: q, timeKeyUsed: timeKey };
       }
@@ -133,13 +154,17 @@ async function searchSmart(sinceISO: string, cursor: string | undefined, opts: {
 async function fetchBulkCasts(hashes: string[]) {
   const out: any[] = [];
   for (let i = 0; i < hashes.length; i += BULK_BATCH) {
+    if (!ensureBudget("bulk")) break;
+
     const chunk = hashes.slice(i, i + BULK_BATCH);
     if (chunk.length === 0) break;
 
     const u = new URL(`${API}/casts`);
     u.searchParams.set("casts", chunk.join(","));
     const r = await fetchRL(u, { headers: { "x-api-key": KEY, accept: "application/json" } });
-    if (!r.ok) throw new Error(`Neynar casts ${r.status}: ${await r.text()}`);
+    REQ_BULK += 1;
+
+    if (!r.ok) break; // экономим бюджет — на ошибке прекращаем дальнейшие батчи
 
     const data = await r.json();
     const result = data?.result ?? data;
@@ -155,6 +180,7 @@ export const revalidate = 0;
 
 export async function GET(req: Request) {
   try {
+    // защита
     const h = headers();
     const isCron = h.get("x-vercel-cron") === "1";
     const url = new URL(req.url);
@@ -167,6 +193,7 @@ export async function GET(req: Request) {
     const pageLimitOverride = Number(url.searchParams.get("pages") || "0");
     const qOverride = url.searchParams.get("q") || undefined;
     const sliceMinutes = Math.max(15, Math.min(240, Number(url.searchParams.get("slice") || SLICE_MINUTES_DEFAULT)));
+    const reset = url.searchParams.get("reset") === "1";
 
     if (!isCron && token !== MANUAL_TOKEN) {
       return NextResponse.json({ error: "forbidden" }, { status: 403 });
@@ -182,43 +209,60 @@ export async function GET(req: Request) {
     }
     await upsertState({ updated_at: new Date().toISOString() });
 
-    const since = hours
-      ? isoMinus(hours * 60)
-      : (st?.last_ts
-          ? new Date(new Date(st.last_ts).getTime() - 5 * 60 * 1000).toISOString()
-          : isoMinus(24 * 60));
+    const since = reset
+      ? isoMinus(24 * 60)
+      : (hours
+          ? isoMinus(hours * 60)
+          : (st?.last_ts
+              ? new Date(new Date(st.last_ts).getTime() - 5 * 60 * 1000).toISOString()
+              : isoMinus(24 * 60)));
 
     const found: any[] = [];
     let pagesFetched = 0;
+    let aborted: "budget" | "empty_streak" | undefined;
+    let errorMsg: string | undefined;
 
     if (hours > 0) {
-      // --- SLICING: для надёжности собираем q="*" + since + sort=desc_chron ---
+      // --- SLICING: q="*" + since + sort=desc_chron; строгие лимиты и ранний выход ---
       const end = new Date();
       const start = new Date(end.getTime() - hours * 60 * 60 * 1000);
       const sliceMs = sliceMinutes * 60 * 1000;
-      const pagesPerSlice = SLICE_PAGES_PER_CHUNK; // обычно 1
+      const pagesPerSlice = SLICE_PAGES_PER_CHUNK;
+
+      let emptyStreak = 0;
 
       for (let t = start.getTime(); t < end.getTime(); t += sliceMs) {
+        if (!budgetLeft()) { aborted = "budget"; break; }
+
         const sliceStart = new Date(t);
         const sliceEnd = new Date(Math.min(t + sliceMs, end.getTime()));
         let cursor: string | undefined = undefined;
         let pages = 0;
+        let addedThisSlice = 0;
 
         do {
+          if (!budgetLeft()) { aborted = "budget"; break; }
+
           const page = await searchPage({
-            q: "*", // проверенно-рабочий широкй запрос
+            q: "*",
             timeKey: "since",
             sinceISO: sliceStart.toISOString(),
             cursor,
             sort: "desc_chron",
           });
 
+          if ((page as any).error) { errorMsg = (page as any).error; break; }
+          if ((page as any).aborted === "budget") { aborted = "budget"; break; }
+
           if (page.casts?.length) {
             const inWindow = page.casts.filter((c: any) => {
               const ts = new Date(c.timestamp).getTime();
               return ts >= sliceStart.getTime() && ts <= sliceEnd.getTime();
             });
-            if (inWindow.length) found.push(...inWindow);
+            if (inWindow.length) {
+              found.push(...inWindow);
+              addedThisSlice += inWindow.length;
+            }
           }
 
           cursor = page.cursor;
@@ -229,33 +273,83 @@ export async function GET(req: Request) {
           await sleep(SLEEP_MS);
         } while (true);
 
-        await sleep(SLEEP_MS); // пауза между слайсами
+        // учёт пустых слайсов подряд — ранний выход
+        if (addedThisSlice === 0) {
+          emptyStreak += 1;
+          if (emptyStreak >= EMPTY_SLICE_ABORT) { aborted = "empty_streak"; break; }
+        } else {
+          emptyStreak = 0;
+        }
+
+        if (aborted || errorMsg) break;
+        await sleep(SLEEP_MS);
       }
     } else {
-      // --- инкрементальный прогон: можно включить fan-out по q ---
+      // --- инкрементальный прогон: допускаем fan-out по q ---
       let cursor: string | undefined;
       const maxPages = pageLimitOverride > 0
         ? Math.min(pageLimitOverride, 15)
         : PAGE_LIMIT;
 
       do {
+        if (!budgetLeft()) { aborted = "budget"; break; }
+
         const page = await searchSmart(since, cursor, {
           qOverride,
           sort: "desc_chron",
           fanOut: true,
         });
+
+        if ((page as any).error) { errorMsg = (page as any).error; break; }
+        if ((page as any).aborted === "budget") { aborted = "budget"; break; }
+
         if (page.casts?.length) found.push(...page.casts);
         cursor = page.cursor;
         pagesFetched += 1;
+
         if (pagesFetched >= maxPages || !cursor) break;
         await sleep(SLEEP_MS);
       } while (true);
+
+      // авто-фоллбек: если ничего не нашли — расширим окно до 6ч и q="*"
+      if (found.length === 0 && !aborted && !errorMsg) {
+        let cursor2: string | undefined = undefined;
+        const sinceFallback = isoMinus(6 * 60);
+        let pages2 = 0;
+        do {
+          if (!budgetLeft()) { aborted = "budget"; break; }
+          const page2 = await searchSmart(sinceFallback, cursor2, {
+            qOverride: "*",
+            sort: "desc_chron",
+            fanOut: false
+          });
+          if ((page2 as any).error) { errorMsg = (page2 as any).error; break; }
+          if ((page2 as any).aborted === "budget") { aborted = "budget"; break; }
+
+          if (page2.casts?.length) found.push(...page2.casts);
+          cursor2 = page2.cursor;
+          pagesFetched += 1;
+          pages2 += 1;
+          if (pages2 >= 5 || !cursor2) break;
+          await sleep(SLEEP_MS);
+        } while (true);
+      }
     }
 
     if (found.length === 0) {
-      return NextResponse.json({ upserted: 0, pagesFetched, note: "no casts", since });
+      return NextResponse.json({
+        upserted: 0,
+        pagesFetched,
+        note: "no casts",
+        since,
+        aborted,
+        error: errorMsg,
+        reqSearch: REQ_SEARCH,
+        reqBulk: REQ_BULK
+      });
     }
 
+    // уникальные хэши
     const uniq = Array.from(new Set(found.map((c: any) => c.hash)));
     let toFetch = uniq;
     if (!includeExisting) {
@@ -269,9 +363,19 @@ export async function GET(req: Request) {
     }
 
     if (toFetch.length === 0) {
-      return NextResponse.json({ upserted: 0, pagesFetched, requestedBulk: 0, skippedExisting: uniq.length, since });
+      return NextResponse.json({
+        upserted: 0,
+        pagesFetched,
+        requestedBulk: 0,
+        skippedExisting: uniq.length,
+        since,
+        aborted,
+        reqSearch: REQ_SEARCH,
+        reqBulk: REQ_BULK
+      });
     }
 
+    // детали и счётчики
     const withCounts = await fetchBulkCasts(toFetch);
 
     const byHash = new Map(withCounts.map((c: any) => [c.hash, c]));
@@ -331,7 +435,10 @@ export async function GET(req: Request) {
       scanned: found.length,
       requestedBulk: toFetch.length,
       skippedExisting: uniq.length - toFetch.length,
-      since
+      since,
+      aborted,
+      reqSearch: REQ_SEARCH,
+      reqBulk: REQ_BULK
     });
   } catch (e: any) {
     console.error("INGEST ERROR:", e?.message || e);
