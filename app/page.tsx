@@ -52,8 +52,8 @@ export default function Page() {
   // mini app state
   const [isMiniApp, setIsMiniApp] = useState(false);
   const [isAdded, setIsAdded] = useState<boolean>(true); // assume added on web
-  const lastCtxRef = useRef<any>(null);
   const [debugInfo, setDebugInfo] = useState<Record<string, any> | null>(null);
+  const lastCtxRef = useRef<any>(null);
 
   async function load() {
     setLoading(true);
@@ -71,11 +71,13 @@ export default function Page() {
     }
   }
 
-  // Init Mini App SDK and robust “added” detection
+  // Init Mini App SDK and robust “added” detection — БЕЗ cleanup()
   useEffect(() => {
     let cancelled = false;
+    let timers: Array<ReturnType<typeof setTimeout>> = [];
+    let off: undefined | (() => void);
 
-    const init = async () => {
+    (async () => {
       try {
         const url =
           typeof window !== "undefined"
@@ -89,16 +91,13 @@ export default function Page() {
         setIsMiniApp(inMini);
 
         if (!inMini) {
-          // In plain web we hide the panel (unless forced).
           setIsAdded(!forcePanel);
           if (wantDebug) setDebugInfo({ inMini, reason: "not in mini app" });
           return;
         }
 
-        // Tell host we are ready (hide splash)
         await sdk.actions.ready();
 
-        // Helper to compute "added" across possible context shapes
         const computeAdded = (ctx: any) => {
           if (!ctx) return undefined;
           const v =
@@ -110,7 +109,6 @@ export default function Page() {
           return typeof v === "boolean" ? v : undefined;
         };
 
-        // First shot at context
         let ctx: any;
         if (typeof (sdk as any).getContext === "function") {
           ctx = await (sdk as any).getContext();
@@ -121,12 +119,8 @@ export default function Page() {
 
         let added = computeAdded(ctx);
         if (forcePanel) added = false;
-        if (added === undefined) {
-          // If unknown yet — show the panel tentatively; we'll correct on update.
-          setIsAdded(false);
-        } else {
-          setIsAdded(!!added);
-        }
+        if (added === undefined) setIsAdded(false);
+        else setIsAdded(!!added);
 
         if (wantDebug) {
           setDebugInfo({
@@ -136,7 +130,6 @@ export default function Page() {
           });
         }
 
-        // Update handler to catch late context updates
         const onContextUpdate = async () => {
           try {
             const c =
@@ -156,23 +149,15 @@ export default function Page() {
           } catch {}
         };
 
-        // Subscribe if SDK exposes events
-        const off = (sdk as any)?.events?.on?.("context", onContextUpdate);
+        // подписка на события, если SDK их даёт
+        off = (sdk as any)?.events?.on?.("context", onContextUpdate);
 
-        // Also poll a few times as a safety net
-        const timers: any[] = [];
+        // страховочный поллинг
         [500, 1200, 2500].forEach((ms) => {
           const t = setTimeout(onContextUpdate, ms);
           timers.push(t);
         });
-
-        // cleanup
-        return () => {
-          timers.forEach(clearTimeout);
-          if (typeof off === "function") off();
-        };
       } catch (e) {
-        // Fall back to plain web
         setIsMiniApp(false);
         setIsAdded(true);
         const wantDebug =
@@ -180,17 +165,12 @@ export default function Page() {
           new URL(window.location.href).searchParams.get("debug") === "1";
         if (wantDebug) setDebugInfo({ error: String(e) });
       }
-    };
-
-    const cleanup = init();
+    })();
 
     return () => {
       cancelled = true;
-      if (typeof cleanup === "function") {
-        try {
-          cleanup();
-        } catch {}
-      }
+      timers.forEach(clearTimeout);
+      if (typeof off === "function") off();
     };
   }, []);
 
