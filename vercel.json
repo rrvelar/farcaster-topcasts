@@ -1,12 +1,13 @@
 {
   "crons": [
     {
-      "path": "/api/ingest?hours=24&includeExisting=1&pages=3",
-      "schedule": "0 */3 * * *"
-    },
-    {
-      "path": "/api/users/refresh",
-      "schedule": "15 */6 * * *"
+      "path": "/api/ingest?mode=eng&hours=24",
+      "schedule": "0 */6 * * *"
     }
+    // при необходимости можно вернуть обновление пользователей:
+     {
+       "path": "/api/users/refresh",
+       "schedule": "15 */6 * * *"
+     }
   ]
 }
