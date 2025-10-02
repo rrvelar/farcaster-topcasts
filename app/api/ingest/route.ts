@@ -1,14 +1,14 @@
 // app/api/ingest/route.ts
+export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
+
 import { NextResponse } from "next/server";
-import { headers } from "next/headers";
+// import { headers } from "next/headers"; // больше не используем
 import { sql } from "../../_db";
 
 /**
  * «Только жирные за окно (по умолчанию 24ч)»
- * - Поиск: q="*" + since=ISO, sort_type=algorithmic (фоллбек на desc_chron)
- * - Берём ENG_PAGES страниц (по умолчанию 5)
- * - Детали через /casts, upsert c greatest(...)
- * - NEW: апсертим авторов (username/display_name/pfp_url) из поиска и из /casts
+ * ...
  */
 
 const API = "https://api.neynar.com/v2/farcaster";
@@ -21,9 +21,9 @@ const ENG_ONLY = (process.env.ENG_ONLY || "1") === "1";
 const ENG_PAGES = Number(process.env.ENG_PAGES || 5);
 
 // лимиты/тайминги Neynar (щадя Starter)
-const RPM = Number(process.env.RPM || 45);             // запросов/мин (держим < 60)
-const SLEEP_MS = Number(process.env.SLEEP_MS || 1800);  // пауза между запросами
-const BULK_BATCH = 100;                                 // батч /casts
+const RPM = Number(process.env.RPM || 45);
+const SLEEP_MS = Number(process.env.SLEEP_MS || 1800);
+const BULK_BATCH = 100;
 const MAX_SEARCH_REQ = Number(process.env.MAX_SEARCH_REQ || 60);
 const MAX_BULK_REQ = Number(process.env.MAX_BULK_REQ || 30);
 
@@ -32,16 +32,8 @@ const MIN_INTERVAL_MIN = Number(process.env.MIN_INTERVAL_MIN || 10);
 
 // ------- утилиты -------
 function sleep(ms: number) { return new Promise(r => setTimeout(r, ms)); }
-function toISOFloorMinutes(d: Date) {
-  const x = new Date(d);
-  x.setUTCSeconds(0, 0);
-  return x.toISOString();
-}
-function isoMinusMinutes(min: number) {
-  const d = new Date();
-  d.setUTCMinutes(d.getUTCMinutes() - min, 0, 0);
-  return d.toISOString();
-}
+function toISOFloorMinutes(d: Date) { const x = new Date(d); x.setUTCSeconds(0, 0); return x.toISOString(); }
+function isoMinusMinutes(min: number) { const d = new Date(); d.setUTCMinutes(d.getUTCMinutes() - min, 0, 0); return d.toISOString(); }
 
 async function getState() {
   const rows = await sql.unsafe(`select last_ts, updated_at from ingest_state where id='casts' limit 1`);
@@ -79,47 +71,30 @@ async function fetchRL(input: RequestInfo | URL, init?: RequestInit, retries = 2
   const r = await fetch(input, init);
   if (r.status === 429 && retries > 0) {
     const ra = r.headers.get("retry-after");
-    const wait = ra ? Number(ra) * 1000 : 1200 * Math.pow(2, 2 - retries); // 1.2s -> 2.4s
+    const wait = ra ? Number(ra) * 1000 : 1200 * Math.pow(2, 2 - retries);
     await sleep(wait);
     return fetchRL(input, init, retries - 1);
   }
   return r;
 }
 
-// ---- helpers для авторов (аватар/имя/ник) ----
+// ---- helpers для авторов ----
 function pickPfpUrl(author: any): string | null {
   if (!author) return null;
-  return author.pfp_url
-      ?? author.pfp?.url
-      ?? author.profile?.pfp_url
-      ?? null;
+  return author.pfp_url ?? author.pfp?.url ?? author.profile?.pfp_url ?? null;
 }
-
 function normalizeAuthor(a: any) {
   if (!a || typeof a.fid !== "number") return null;
-  return {
-    fid: a.fid,
-    username: a.username ?? null,
-    display_name: a.display_name ?? null,
-    pfp_url: pickPfpUrl(a),
-  };
+  return { fid: a.fid, username: a.username ?? null, display_name: a.display_name ?? null, pfp_url: pickPfpUrl(a) };
 }
-
 async function upsertAuthors(authorsRaw: any[]) {
-  const cleaned = authorsRaw.map(normalizeAuthor).filter(Boolean) as Array<{
-    fid: number; username: string | null; display_name: string | null; pfp_url: string | null;
-  }>;
+  const cleaned = authorsRaw.map(normalizeAuthor).filter(Boolean) as Array<{ fid: number; username: string | null; display_name: string | null; pfp_url: string | null; }>;
   if (cleaned.length === 0) return 0;
-
-  // дедуп по fid
   const map = new Map<number, (typeof cleaned)[number]>();
   for (const a of cleaned) if (!map.has(a.fid)) map.set(a.fid, a);
   const authors = Array.from(map.values());
 
-  const values = authors.map((_, i) =>
-    `($${i*4+1}, $${i*4+2}, $${i*4+3}, $${i*4+4})`
-  ).join(",");
-
+  const values = authors.map((_, i) => `($${i*4+1}, $${i*4+2}, $${i*4+3}, $${i*4+4})`).join(",");
   const params = authors.flatMap(a => [a.fid, a.username, a.display_name, a.pfp_url]);
 
   await sql.unsafe(
@@ -137,7 +112,7 @@ async function upsertAuthors(authorsRaw: any[]) {
   return authors.length;
 }
 
-// ---- одна страница cast/search (q="*", since=ISO, sort_type=...) ----
+// ---- одна страница cast/search ----
 async function searchPageSince(
   sinceISO: string,
   cursor?: string,
@@ -146,9 +121,9 @@ async function searchPageSince(
   if (REQ_SEARCH >= MAX_SEARCH_REQ) return { casts: [], cursor: undefined, aborted: "budget" as const };
 
   const u = new URL(`${API}/cast/search`);
-  u.searchParams.set("q", "*");            // максимально широкий запрос
+  u.searchParams.set("q", "*");
   u.searchParams.set("limit", "100");
-  u.searchParams.set("sort_type", sort);   // algorithmic приоритетно, дальше фоллбек
+  u.searchParams.set("sort_type", sort);
   u.searchParams.set("since", sinceISO);
   if (cursor) u.searchParams.set("cursor", cursor);
 
@@ -180,7 +155,6 @@ async function fetchBulkCasts(hashes: string[]) {
 
     const r = await fetchRL(u, { headers: { "x-api-key": KEY, accept: "application/json" } });
     REQ_BULK += 1;
-
     if (!r.ok) break;
 
     const data = await r.json();
@@ -193,7 +167,7 @@ async function fetchBulkCasts(hashes: string[]) {
   return out;
 }
 
-// ---- основной режим: ENG-ONLY (algorithmic c фоллбеком) ----
+// ---- основной режим: ENG-ONLY ----
 async function runEngagementOnly(hours: number) {
   const sinceISO = toISOFloorMinutes(new Date(Date.now() - hours * 60 * 60 * 1000));
 
@@ -201,7 +175,7 @@ async function runEngagementOnly(hours: number) {
   let cursor: string | undefined = undefined;
   let pages = 0;
 
-  // 1) пробуем algorithmic
+  // 1) algorithmic
   do {
     const page = await searchPageSince(sinceISO, cursor, "algorithmic");
     if ((page as any).aborted === "budget" || (page as any).error) break;
@@ -220,7 +194,7 @@ async function runEngagementOnly(hours: number) {
     await sleep(SLEEP_MS);
   } while (true);
 
-  // 2) если собрали мало/пусто — один прогон фоллбеком desc_chron
+  // 2) fallback desc_chron
   if (collected.length === 0 && REQ_SEARCH < MAX_SEARCH_REQ) {
     cursor = undefined;
     pages = 0;
@@ -250,16 +224,20 @@ export const revalidate = 0;
 
 export async function GET(req: Request) {
   try {
-    const h = headers();
-    const isCron = h.get("x-vercel-cron") === "1";
+    // ---------- АВТОРИЗАЦИЯ КРОНА/ТОКЕНА ----------
     const url = new URL(req.url);
+    const hdr = req.headers;
+    const ua = hdr.get("user-agent") || "";
+    const isCron = hdr.get("x-vercel-cron") === "1" || /vercel-cron/i.test(ua);
 
-    const token = url.searchParams.get("token");
+    const token = url.searchParams.get("token") || hdr.get("x-ingest-token") || "";
     const force = url.searchParams.get("force") === "1";
-    const mode = (url.searchParams.get("mode") || "").toLowerCase(); // "eng" — принудительно
-    const hours = Math.max(1, Math.min(168, Number(url.searchParams.get("hours") || "24"))); // окно часов
+    const mode = (url.searchParams.get("mode") || "").toLowerCase();
+    const hours = Math.max(1, Math.min(168, Number(url.searchParams.get("hours") || "24")));
 
     if (!isCron && token !== MANUAL_TOKEN) {
+      // единичный лог поможет в диагностике
+      console.error("ingest forbidden", { ua, xvc: hdr.get("x-vercel-cron"), hasToken: !!token });
       return NextResponse.json({ error: "forbidden" }, { status: 403 });
     }
     if (!KEY) return NextResponse.json({ error: "NEYNAR_API_KEY missing" }, { status: 500 });
@@ -293,7 +271,7 @@ export async function GET(req: Request) {
     // дедуп по hash
     const uniq = Array.from(new Set(items.map((c: any) => c.hash)));
 
-    // --- NEW: апсерт авторов из результатов ПОИСКА (до /casts) ---
+    // апсерт авторов (из поиска)
     try {
       const authorsFromSearch = (items || []).map((c: any) => c?.author).filter(Boolean);
       await upsertAuthors(authorsFromSearch);
@@ -304,7 +282,7 @@ export async function GET(req: Request) {
     // детали и счётчики
     const withCounts = await fetchBulkCasts(uniq);
 
-    // --- NEW: апсерт авторов из /casts (часто богаче по данным) ---
+    // апсерт авторов (из /casts)
     try {
       const authorsFromCasts = (withCounts || []).map((c: any) => c?.author).filter(Boolean);
       await upsertAuthors(authorsFromCasts);
