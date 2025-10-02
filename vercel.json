@@ -4,7 +4,6 @@
       "path": "/api/ingest?mode=eng&hours=24",
       "schedule": "0 */6 * * *"
     }
-    
      {
        "path": "/api/users/refresh",
        "schedule": "15 */6 * * *"
